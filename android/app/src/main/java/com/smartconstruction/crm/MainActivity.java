@@ -1,7 +1,6 @@
 package com.smartconstruction.crm;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -46,6 +45,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.RequiresApi;
 import androidx.webkit.WebMessageCompat;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
@@ -553,10 +553,13 @@ public final class MainActivity extends Activity {
         else finish();
     }
 
+    // Android 8–12 use this legacy hook. API 33+ registers OnBackInvokedCallback
+    // in onCreate; gesture handling on modern Android does not depend on this override.
+    @SuppressLint("GestureBackNavigation")
     @SuppressWarnings("deprecation")
     @Override public void onBackPressed() { handleBack(); }
 
-    @TargetApi(33)
+    @RequiresApi(33)
     private static final class BackApi33 {
         static Runnable register(Activity activity, Runnable back) {
             android.window.OnBackInvokedCallback callback = back::run;
