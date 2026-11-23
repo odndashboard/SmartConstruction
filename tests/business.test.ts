@@ -291,3 +291,40 @@ describe('follow-ups, delivery and example records', () => {
     assert.ok(data.customers.some(row => row.id === lead.customerId));
   });
 });
+
+describe('employee activation controls', () => {
+  test('only owners can disable or enable employees', () => {
+    const data = workspace();
+    for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'VIEWER'] as Role[]) {
+      setRole(data, role);
+      expectDenied(() => act(data, 'member_active', { userId: 'test-sales', active: false }));
+    }
+  });
+
+  test('owner disables and re-enables a member without rewriting their role', () => {
+    const data = workspace();
+    act(data, 'member_active', { userId: 'test-sales', active: false });
+    const employee = data.members.find(member => member.userId === 'test-sales')!;
+    assert.equal(employee.active, false); assert.equal(employee.role, 'SALES');
+    assert.equal(data.activity[0].action, 'member_active');
+    data.user = { ...employee };
+    expectDenied(() => act(data, 'customer_save', { name: 'Blocked after disable' }));
+    setRole(data, 'OWNER');
+    act(data, 'member_active', { userId: employee.userId, active: true });
+    assert.equal(employee.active, true); assert.equal(employee.role, 'SALES');
+  });
+
+  test('self-disable is blocked even when another owner exists', () => {
+    const data = workspace();
+    data.members.push({ userId: 'second-owner', name: 'Second Owner', email: 'second@example.invalid', role: 'OWNER', active: true });
+    assert.throws(() => act(data, 'member_active', { userId: data.user.userId, active: false }), /cannot disable your own/i);
+    assert.equal(data.members[0].active, true);
+  });
+
+  test('repeating the current activation state is a no-op with no extra audit', () => {
+    const data = workspace(); const events = data.activity.length;
+    assert.match(act(data, 'member_active', { userId: 'test-sales', active: true }), /already active/);
+    assert.equal(data.activity.length, events);
+    assert.throws(() => act(data, 'member_active', { userId: 'test-sales', active: false, role: 'OWNER' }), CRMError);
+  });
+});

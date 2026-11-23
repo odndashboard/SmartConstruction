@@ -27,7 +27,9 @@ const item = z.object({
   id, description: required(2000), hsnSac: text(8).default(''), quantity: required(30), unit: required(24),
   unitPrice: required(30), discount: text(30).default('0'), gstRate: required(30),
 }).strict();
-const schemas: Record<string, z.ZodTypeAny> = {
+// This dynamic action registry retains action-specific runtime validation.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- The dispatcher selects a heterogeneous schema by a validated action string; every payload is parsed by its strict schema before use.
+const schemas: Record<string, z.ZodType<any>> = {
   customer_save: z.object({ id: id.optional(), name: required(), contact: blank(), phone: blank(40), email, address: blank(2000), stateCode: state, gstin: blank(15) }).strict(),
   lead_save: z.object({ id: id.optional(), customerId: id, title: required(), contact: blank(), phone: blank(40), email,
     location: blank(), siteAddress: blank(2000), stateCode: state, value: text(30).default('0'), status: leadStatus.default('NEW'),
@@ -50,6 +52,7 @@ const schemas: Record<string, z.ZodTypeAny> = {
   company_save: z.object({ name: required(), legalName: blank(), address: blank(2000), gstin: blank(15), stateCode: state,
     phone: blank(40), email, website: blank(500).refine(v => !v || /^https?:\/\//i.test(v), 'Website must begin with https:// or http://.'), terms: blank(12000) }).strict(),
   member_role: z.object({ userId: id, role }).strict(),
+  member_active: z.object({ userId: id, active: z.boolean() }).strict(),
   load_demo: z.object({}).strict(),
   clear_demo: z.object({}).strict(),
 };
@@ -63,7 +66,7 @@ const permission: Record<string, Role[]> = {
   quote_save: SALES, quote_revise: SALES,
   quote_issue: APPROVE, quote_accept: APPROVE, quote_decline: APPROVE, quote_convert: APPROVE,
   workorder_save: DELIVERY, milestone_add: DELIVERY, milestone_complete: DELIVERY,
-  company_save: ['OWNER'], member_role: ['OWNER'], load_demo: ['OWNER'], clear_demo: ['OWNER'],
+  company_save: ['OWNER'], member_role: ['OWNER'], member_active: ['OWNER'], load_demo: ['OWNER'], clear_demo: ['OWNER'],
 };
 const workTransitions: Record<WorkStatus, WorkStatus[]> = {
   PLANNED: ['ACTIVE', 'CANCELLED'], ACTIVE: ['ON_HOLD', 'COMPLETED', 'CANCELLED'],
@@ -299,6 +302,16 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       target.role = p.role;
       audit(data, action, 'member', target.userId, `Changed ${target.name}'s role to ${p.role.toLowerCase()}`, stamp);
       return 'Team role updated.';
+    }
+    case 'member_active': {
+      const target = data.members.find(member => member.userId === p.userId);
+      assert(target, 'Choose an existing team member.');
+      assert(target.userId !== data.user.userId || p.active, 'You cannot disable your own account.');
+      assert(p.active || target.role !== 'OWNER' || !target.active || data.members.filter(m => m.active && m.role === 'OWNER').length > 1, 'The workspace must retain an active owner.');
+      if (target.active === p.active) return p.active ? 'Team member is already active.' : 'Team member is already disabled.';
+      target.active = p.active;
+      audit(data, action, 'member', target.userId, `${p.active ? 'Enabled' : 'Disabled'} ${target.name}'s CRM access`, stamp);
+      return p.active ? 'Team member enabled.' : 'Team member disabled. Their existing session can no longer access CRM data.';
     }
     case 'load_demo': {
       if (data.customers.some(c => c.isDemo) || data.leads.some(l => l.isDemo)) return 'Example records are already loaded.';

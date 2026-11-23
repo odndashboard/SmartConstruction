@@ -43,3 +43,8 @@ yarn-error.log*
 
 # OS metadata
 .DS_Store
+
+# Vercel linkage, operator output, and local configuration
+/.vercel/
+/private/
+!.env.example
