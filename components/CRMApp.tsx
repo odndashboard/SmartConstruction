@@ -147,6 +147,18 @@ export default function CRMApp() {
   const open = (next: ModalState) => { setModal(next); setModalError(''); };
   const navigate = (next: Section, nextFilter = 'all') => { setSection(next); setFilter(nextFilter); setSearch(''); setMobileNav(false); };
 
+  useEffect(() => {
+    const back = (event: Event) => {
+      if (busy) { event.preventDefault(); return; }
+      if (modal) { event.preventDefault(); close(); }
+      else if (mobileNav) { event.preventDefault(); setMobileNav(false); }
+      else if (search) { event.preventDefault(); setSearch(''); }
+      else if (section !== 'dashboard') { event.preventDefault(); setSection('dashboard'); setFilter('all'); }
+    };
+    window.addEventListener('smart-construction-back', back);
+    return () => window.removeEventListener('smart-construction-back', back);
+  }, [busy, close, modal, mobileNav, search, section]);
+
   const mutate: Mutation = async (action, payload, shouldClose = true) => {
     if (!data || busy) return;
     setBusy(true); setModalError('');

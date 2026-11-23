@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="navy">#172B38</color>
+    <color name="gold">#EEB04A</color>
+    <color name="paper">#F7F8FA</color>
+    <color name="ink">#2F414E</color>
+    <color name="muted">#748591</color>
+</resources>

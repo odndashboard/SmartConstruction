@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Smart Construction</string>
+    <string name="brand_name">smart construction</string>
+    <string name="more_options">More options</string>
+    <string name="refresh">Refresh workspace</string>
+    <string name="open_browser">Open in browser</string>
+    <string name="print_job_name">Smart Construction document</string>
+    <string name="opening_title">Your team. Your workspace.</string>
+    <string name="opening_detail">Connecting to Smart Construction…</string>
+    <string name="offline_title">Let’s reconnect.</string>
+    <string name="offline_detail">Your workspace needs an internet connection. Check your connection and try again.</string>
+    <string name="secure_error_title">Secure connection unavailable</string>
+    <string name="secure_error_detail">The workspace could not establish a secure connection. Please try again later.</string>
+    <string name="retry">Try again</string>
+    <string name="link_blocked">This link cannot be opened inside the workspace.</string>
+    <string name="no_link_handler">No app is available to open this link.</string>
+    <string name="webview_unavailable">Update Android System WebView or open the workspace in your browser.</string>
+    <string name="wait_for_page">Wait for the workspace to finish loading.</string>
+    <string name="print_unavailable">Printing is unavailable on this device.</string>
+    <string name="print_in_progress">Finish the current print job before starting another.</string>
+    <string name="export_busy">Finish saving the current file first.</string>
+    <string name="export_failed">Could not prepare the export. Sign in and try again.</string>
+    <string name="export_too_large">This export exceeds the 8 MiB app limit. Use the website in your browser.</string>
+    <string name="unsupported_download">Open the workspace in your browser to save this file, or update Android System WebView.</string>
+    <string name="save_unavailable">No document picker is available on this device.</string>
+    <string name="save_failed">The file could not be saved. Please try again.</string>
+    <string name="save_success">File saved.</string>
+</resources>
