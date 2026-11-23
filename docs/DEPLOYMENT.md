@@ -51,6 +51,8 @@ Enter the secret directly into Vercel; do not put it in GitHub or send it throug
 
 ## 4. Create and designate your Owner account
 
+**This installation now has its designated, confirmed Owner. Production password login and Owner access have been verified. Do not rerun initialization.** The account-creation instructions below apply to a separately initialized installation or to an operator's documented recovery procedure.
+
 In Supabase **Authentication → Users**, use **Add user / Create user** to create your own account with your real email and a password that you choose privately. Use the dashboard's confirmation option for this administrator-created account. Copy its exact user UUID.
 
 Run the following in that project's SQL Editor, replacing the placeholder with your own user UUID. This is an administrator operation, performed once. The transaction assumes the SQL Editor's database administrator can set the built-in `service_role` role. It cannot be run by a website visitor.
@@ -68,6 +70,8 @@ The function refuses to bootstrap if any CRM membership already exists. It does 
 Open the CRM domain and sign in with your own email/password. Confirm your role is **Owner**, then complete the company details in Settings. This establishes the administrator before admitting employees.
 
 If a terminal is available, `npm run owner:setup -- --email ... --name ...` provides a private activation-link alternative to the dashboard account creation step.
+
+An explicitly authorized password setup can use `scripts/setup-password-owner.mjs --execute --operator-only` inside a dedicated, non-serving Vercel Production administration build. This separate script requires an expiring `CRM_OWNER_SETUP_JSON` Production Secret and binds the operation to the expected project and exact source commit. It refuses an existing Owner or matching Auth account and never sends mail. Its deliberate success exit code is 78, so verify the success marker and database identity rather than interpreting the deployment's ERROR state as provisioning failure. Clear the temporary input and return to ordinary `main` source after execution. Do not put the command in normal build/install hooks or expose it through an HTTP route; do not automatically retry after a partial account creation.
 
 ## 5. Add your employees
 
