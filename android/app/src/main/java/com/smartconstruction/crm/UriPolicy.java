@@ -55,6 +55,13 @@ public final class UriPolicy {
                 && uri.getRawQuery() == null && uri.getRawFragment() == null;
     }
 
+    public static boolean isExpenseReceipt(String value) {
+        URI uri = parse(value);
+        return isInternal(value) && uri != null && uri.getRawQuery() == null
+                && uri.getRawFragment() == null && uri.getRawPath().matches(
+                "/api/expense-receipts/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+    }
+
     /** Static fonts are the only non-CRM subresources the existing site needs. */
     public static boolean isAllowedResource(String value, String method) {
         if (isInternal(value)) return true;

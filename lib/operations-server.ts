@@ -6,13 +6,15 @@ import { CRMError } from './server-actions';
 import { todayIST } from './finance';
 import { operationsMonthSchema, operationsMutationSchema, teamActivityQuerySchema } from './operations-validation';
 import type { OperationsData, StockItem, StockMovement, AttendanceRecord, Expense, TeamActivityData } from './operations-types';
+import type { OperationsExtension } from './operations-extensions';
 
 interface OperationsExport {
   revision: number; stockItems: StockItem[]; stockMovements: StockMovement[];
   attendance: AttendanceRecord[]; expenses: Expense[]; audit?: Record<string, unknown>[];
+  extension: OperationsExtension;
 }
 
-async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
+export async function operationsRpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const { data, error } = await createAdminClient().rpc(name, args);
   if (error) {
     const code = error.code ?? '';
@@ -42,7 +44,7 @@ export async function getOperations(monthInput?: string | null): Promise<Operati
   const identity = await authenticate();
   const parsed = operationsMonthSchema.safeParse(monthInput ?? todayIST().slice(0, 7));
   if (!parsed.success) throw new CRMError('Choose a valid month.');
-  return rpc<OperationsData>('crm_operations_read', { p_actor_id: identity.userId, p_month: parsed.data });
+  return operationsRpc<OperationsData>('crm_operations_v2_read', { p_actor_id: identity.userId, p_month: parsed.data });
 }
 
 export async function mutateOperations(request: Request): Promise<{ data: OperationsData; message: string }> {
@@ -50,7 +52,7 @@ export async function mutateOperations(request: Request): Promise<{ data: Operat
   const identity = await authenticate();
   // SQL resolves the live role, scope, membership and state under its write lock.
   // No actor ID or role supplied by a browser is accepted by the request schema.
-  return rpc('crm_operations_mutate', {
+  return operationsRpc('crm_operations_v2_mutate', {
     p_actor_id: identity.userId, p_expected_revision: input.expectedRevision,
     p_request_id: input.requestId, p_action: input.action,
     p_payload_hash: await payloadHash(input.action, input.payload), p_payload: input.payload, p_month: input.month,
@@ -60,7 +62,7 @@ export async function mutateOperations(request: Request): Promise<{ data: Operat
 /** SQL scopes each collection, including exports, to this authenticated member. */
 export async function getOperationsExport(): Promise<OperationsExport> {
   const identity = await authenticate();
-  return rpc<OperationsExport>('crm_operations_export', { p_actor_id: identity.userId });
+  return operationsRpc<OperationsExport>('crm_operations_v2_export', { p_actor_id: identity.userId });
 }
 
 export async function getTeamActivity(searchParams: URLSearchParams): Promise<TeamActivityData> {
@@ -72,7 +74,7 @@ export async function getTeamActivity(searchParams: URLSearchParams): Promise<Te
   const input = parsed.data;
   // The SQL function independently requires the current Owner role. A query
   // filter selects whose work to inspect; it can never select the caller.
-  return rpc<TeamActivityData>('crm_team_activity_read', {
+  return operationsRpc<TeamActivityData>('crm_team_activity_read', {
     p_actor_id: identity.userId, p_month: input.month, p_employee_id: input.employeeId ?? null,
     p_module: input.module, p_page: input.page,
   });

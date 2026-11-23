@@ -20,25 +20,35 @@ const MODULE_LABELS: Record<TeamActivityModule, string> = {
   all: 'All modules', leads: 'Leads', followups: 'Follow-ups', quotations: 'Quotations',
   workorders: 'Work orders', customers: 'Customers', team: 'Team access', settings: 'Settings',
   stock: 'Stock', attendance: 'Attendance', expenses: 'Expenses',
+  payments: 'Customer payments',
 };
 const MODULE_ICONS: Record<TeamActivityModule, typeof Activity> = {
   all: Activity, leads: UsersRound, followups: CalendarClock, quotations: FileText,
   workorders: HardHat, customers: ContactRound, team: ShieldCheck, settings: Settings2,
   stock: Package, attendance: CalendarDays, expenses: ReceiptText,
+  payments: ReceiptText,
 };
 const STATUS_LABELS: Record<string, string> = {
   PRESENT: 'Present', HALF_DAY: 'Half day', ABSENT: 'Absent', LEAVE: 'On leave',
   SUBMITTED: 'Awaiting review', APPROVED: 'Approved', REJECTED: 'Rejected', PAID: 'Paid', WITHDRAWN: 'Withdrawn',
   IN: 'Stock received', OUT: 'Stock used / issued', ADJUST: 'Balance correction', SELF: 'Employee', ADMIN: 'Administrator',
+  OPEN: 'Open', PART_RECEIVED: 'Part received', RECEIVED: 'Received', CANCELLED: 'Cancelled', FULFILLED: 'Fulfilled', READY: 'Attached',
 };
 const TRACKED_FIELDS: [string, string][] = [
-  ['name', 'Stock item'], ['sku', 'Stock code'], ['title', 'Expense'], ['memberName', 'Employee'],
+  ['name', 'Name'], ['sku', 'Stock code'], ['title', 'Title'], ['memberName', 'Employee'],
   ['unit', 'Unit'], ['location', 'Storage location'], ['quantityMilli', 'Remaining stock'],
   ['minQuantityMilli', 'Reorder level'], ['active', 'Item availability'], ['workDate', 'Attendance date'],
   ['expenseDate', 'Expense date'], ['category', 'Category'], ['amountPaise', 'Amount'],
   ['status', 'Status'], ['checkIn', 'Check-in (IST)'], ['checkOut', 'Check-out (IST)'],
   ['site', 'Site / project'], ['reference', 'Bill / payment reference'], ['notes', 'Notes'],
   ['reviewNote', 'Review note'], ['reviewedBy', 'Reviewed by'], ['reviewedAt', 'Reviewed at (IST)'], ['source', 'Recorded by'],
+  ['fileName', 'Receipt file'], ['mimeType', 'File type'], ['sizeBytes', 'File size'],
+  ['paymentDate', 'Payment date'], ['dueDate', 'Due date'], ['method', 'Payment method'],
+  ['voidedAt', 'Voided at (IST)'], ['voidReason', 'Reason for void'], ['cancelReason', 'Cancellation reason'],
+  ['supplier', 'Supplier'], ['expectedOn', 'Expected delivery'], ['neededOn', 'Required by'],
+  ['configured', 'Shift rules enabled'], ['startLocal', 'Shift starts (IST)'], ['endLocal', 'Shift finishes (IST)'],
+  ['overnight', 'Overnight shift'], ['breakMinutes', 'Unpaid break'], ['graceMinutes', 'Arrival grace period'],
+  ['approvedOvertimeMinutes', 'Approved overtime'], ['overtimeReason', 'Overtime review reason'],
 ];
 
 function simple(value: unknown): string { return typeof value === 'string' ? value : ''; }
@@ -74,9 +84,12 @@ function formatField(key: string, value: unknown, snapshot: Snapshot, members: M
   if (key === 'amountPaise') return money(value);
   if (key.endsWith('Milli')) return quantity(value, simple(snapshot?.unit) || fallbackUnit);
   if (key === 'active') return value === true ? 'Active' : 'Archived';
+  if (key === 'configured' || key === 'overnight') return value === true ? 'Yes' : 'No';
+  if (key.endsWith('Minutes')) return `${value} minutes`;
+  if (key === 'sizeBytes' && typeof value === 'number') return `${Math.ceil(value / 1024)} KB`;
   if (key === 'reviewedBy') return members.get(simple(value))?.name || 'Team member';
-  if (key === 'checkIn' || key === 'checkOut' || key === 'reviewedAt') return timestamp(simple(value));
-  if (key === 'workDate' || key === 'expenseDate') return dayLabel(simple(value));
+  if (key === 'checkIn' || key === 'checkOut' || key === 'reviewedAt' || key === 'voidedAt') return timestamp(simple(value));
+  if (['workDate', 'expenseDate', 'paymentDate', 'dueDate', 'expectedOn', 'neededOn'].includes(key)) return dayLabel(simple(value));
   if (key === 'status' || key === 'source') return STATUS_LABELS[simple(value)] || 'Recorded';
   return typeof value === 'string' || typeof value === 'number' ? String(value) : 'Not recorded';
 }

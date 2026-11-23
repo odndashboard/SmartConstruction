@@ -4,6 +4,8 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.ProviderInfo;
+import android.database.Cursor;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -13,6 +15,7 @@ import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.print.PrintAttributes;
 import android.print.PrintJob;
 import android.print.PrintManager;
@@ -35,6 +38,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.ValueCallback;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
@@ -70,6 +74,7 @@ import javax.net.ssl.HttpsURLConnection;
 public final class MainActivity extends Activity {
     private static final String BRIDGE_NAME = "SmartConstructionNative";
     private static final int CREATE_DOCUMENT = 1001;
+    private static final int FIRST_OPEN_RECEIPT = 1100;
     private static final String BACK_EVENT_SCRIPT =
             "(function(){return !window.dispatchEvent(new Event('smart-construction-back',{cancelable:true}));})()";
 
@@ -90,6 +95,11 @@ public final class MainActivity extends Activity {
     private PendingExport pendingExport;
     private PrintJob printJob;
     private Runnable unregisterBack;
+    private ValueCallback<Uri[]> receiptCallback;
+    private String receiptPageUrl;
+    private int receiptRequestCode = -1;
+    private int nextReceiptRequestCode = FIRST_OPEN_RECEIPT;
+    private long pageGeneration;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -242,8 +252,12 @@ public final class MainActivity extends Activity {
                 // Web content can include account details; never copy console output to native logs.
                 return true;
             }
+            @Override public boolean onShowFileChooser(WebView source, ValueCallback<Uri[]> callback,
+                                                       FileChooserParams parameters) {
+                return chooseReceipt(source, callback, parameters);
+            }
         });
-        view.setDownloadListener((url, userAgent, contentDisposition, mimeType, length) -> prepareWorkspaceExport(url, userAgent));
+        view.setDownloadListener((url, userAgent, contentDisposition, mimeType, length) -> prepareWorkspaceDownload(url, userAgent));
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             WebViewCompat.addWebMessageListener(view, BRIDGE_NAME,
@@ -270,9 +284,9 @@ public final class MainActivity extends Activity {
     private final class WorkspaceClient extends WebViewClient {
         @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             String url = request.getUrl().toString();
-            if (request.isForMainFrame() && UriPolicy.isWorkspaceExport(url)) {
+            if (request.isForMainFrame() && (UriPolicy.isWorkspaceExport(url) || UriPolicy.isExpenseReceipt(url))) {
                 if (request.hasGesture() && !request.isRedirect()) {
-                    prepareWorkspaceExport(url, view.getSettings().getUserAgentString());
+                    prepareWorkspaceDownload(url, view.getSettings().getUserAgentString());
                 } else notifyUser(R.string.unsupported_download);
                 return true;
             }
@@ -290,6 +304,8 @@ public final class MainActivity extends Activity {
             return allowed ? null : blockedResource();
         }
         @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+            pageGeneration++;
+            cancelReceiptPicker();
             if (!UriPolicy.isInternal(url)) {
                 view.stopLoading();
                 showFailure(false);
@@ -299,6 +315,9 @@ public final class MainActivity extends Activity {
             pageLoaded = false;
             mainFrameFailed = false;
             progress.setVisibility(View.VISIBLE);
+        }
+        @Override public void doUpdateVisitedHistory(WebView view, String url, boolean reload) {
+            if (receiptCallback != null && !url.equals(receiptPageUrl)) cancelReceiptPicker();
         }
         @Override public void onPageFinished(WebView view, String url) {
             if (!mainFrameFailed && UriPolicy.isInternal(view.getUrl())) {
@@ -320,6 +339,8 @@ public final class MainActivity extends Activity {
             if (UriPolicy.isInternal(error.getUrl())) showFailure(true);
         }
         @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            pageGeneration++;
+            cancelReceiptPicker();
             content.removeView(view);
             view.destroy();
             webView = null;
@@ -334,6 +355,7 @@ public final class MainActivity extends Activity {
     }
 
     private void loadWorkspace(String url) {
+        cancelReceiptPicker();
         if (!UriPolicy.isInternal(url)) url = UriPolicy.HOME;
         retryUrl = url;
         showConnecting();
@@ -362,6 +384,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showFailure(boolean secure) {
+        cancelReceiptPicker();
         mainFrameFailed = true;
         pageLoaded = false;
         connectionTitle.setText(secure ? R.string.secure_error_title : R.string.offline_title);
@@ -447,13 +470,18 @@ public final class MainActivity extends Activity {
         } catch (RuntimeException ignored) { notifyUser(R.string.print_unavailable); }
     }
 
-    private void prepareWorkspaceExport(String url, String userAgent) {
-        if (!UriPolicy.isWorkspaceExport(url) || webView == null || !UriPolicy.isInternal(webView.getUrl())) {
+    private void prepareWorkspaceDownload(String url, String userAgent) {
+        final boolean receipt = UriPolicy.isExpenseReceipt(url);
+        if ((!receipt && !UriPolicy.isWorkspaceExport(url)) || webView == null
+                || mainFrameFailed || !UriPolicy.isInternal(webView.getUrl())) {
             notifyUser(R.string.unsupported_download); return;
         }
         if (exportBusy || pendingExport != null) { notifyUser(R.string.export_busy); return; }
         exportBusy = true;
-        // Session cookies stay in memory and are sent only to the exact CRM export endpoint.
+        final long generation = pageGeneration;
+        final String sourceUrl = webView.getUrl();
+        final int limit = receipt ? ReceiptPolicy.MAX_BYTES : ExportPolicy.MAX_BYTES;
+        // Session cookies stay in memory and are sent only to an exact authorized CRM endpoint.
         final String cookies = CookieManager.getInstance().getCookie(url);
         fileExecutor.execute(() -> {
             HttpsURLConnection connection = null;
@@ -463,33 +491,136 @@ public final class MainActivity extends Activity {
                 connection.setConnectTimeout(15_000);
                 connection.setReadTimeout(30_000);
                 connection.setUseCaches(false);
-                connection.setRequestProperty("Accept", "application/json");
+                connection.setRequestProperty("Accept", receipt ? "image/jpeg,image/png,image/webp,application/pdf" : "application/json");
                 connection.setRequestProperty("Cache-Control", "no-store");
                 if (userAgent != null) connection.setRequestProperty("User-Agent", userAgent);
                 if (cookies != null && !cookies.isEmpty()) connection.setRequestProperty("Cookie", cookies);
-                if (connection.getResponseCode() != 200 || !"application/json".equals(ExportPolicy.normalizedMime(connection.getContentType()))) {
+                String responseMime = receipt ? ReceiptPolicy.normalizedMime(connection.getContentType())
+                        : ExportPolicy.normalizedMime(connection.getContentType());
+                if (connection.getResponseCode() != 200 || responseMime == null
+                        || (!receipt && !"application/json".equals(responseMime))) {
                     throw new IOException("EXPORT_REJECTED");
                 }
-                if (connection.getContentLengthLong() > ExportPolicy.MAX_BYTES) throw new ExportTooLargeException();
+                if (connection.getContentLengthLong() > limit) throw new ExportTooLargeException();
                 byte[] bytes;
                 try (InputStream input = connection.getInputStream(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
                     byte[] buffer = new byte[8192];
                     int count;
                     while ((count = input.read(buffer)) != -1) {
-                        if (output.size() + count > ExportPolicy.MAX_BYTES) throw new ExportTooLargeException();
+                        if (output.size() + count > limit) throw new ExportTooLargeException();
                         output.write(buffer, 0, count);
                     }
                     bytes = output.toByteArray();
                 }
+                if (receipt && !ReceiptPolicy.matchesSignature(bytes, responseMime)) {
+                    Arrays.fill(bytes, (byte) 0);
+                    throw new IOException("RECEIPT_TYPE");
+                }
                 runOnUiThread(() -> {
                     exportBusy = false;
-                    if (isFinishing() || isDestroyed()) Arrays.fill(bytes, (byte) 0);
-                    else beginSave(bytes, "smart-construction-workspace.json", "application/json");
+                    if (isFinishing() || isDestroyed() || pageGeneration != generation || webView == null
+                            || !sourceUrl.equals(webView.getUrl())) Arrays.fill(bytes, (byte) 0);
+                    else beginSave(bytes, receipt ? ReceiptPolicy.filename(responseMime)
+                            : "smart-construction-workspace.json", responseMime);
                 });
             } catch (IOException | RuntimeException error) {
-                final int message = error instanceof ExportTooLargeException ? R.string.export_too_large : R.string.export_failed;
+                final int message = error instanceof ExportTooLargeException
+                        ? (receipt ? R.string.receipt_too_large : R.string.export_too_large)
+                        : (receipt ? R.string.receipt_failed : R.string.export_failed);
                 runOnUiThread(() -> { exportBusy = false; notifyUser(message); });
             } finally { if (connection != null) connection.disconnect(); }
+        });
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean chooseReceipt(WebView source, ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams parameters) {
+        cancelReceiptPicker();
+        if (source != webView || !pageLoaded || mainFrameFailed || !UriPolicy.isInternal(source.getUrl())
+                || parameters.getMode() != WebChromeClient.FileChooserParams.MODE_OPEN) {
+            callback.onReceiveValue(null);
+            notifyUser(R.string.receipt_invalid);
+            return true;
+        }
+        receiptCallback = callback;
+        receiptPageUrl = source.getUrl();
+        receiptRequestCode = nextReceiptRequestCode++;
+        if (nextReceiptRequestCode > 65_000) nextReceiptRequestCode = FIRST_OPEN_RECEIPT;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, ReceiptPolicy.MIME_TYPES.clone());
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try { startActivityForResult(intent, receiptRequestCode); }
+        catch (ActivityNotFoundException | SecurityException ignored) {
+            cancelReceiptPicker();
+            notifyUser(R.string.save_unavailable);
+        }
+        return true;
+    }
+
+    private void cancelReceiptPicker() {
+        ValueCallback<Uri[]> callback = receiptCallback;
+        receiptCallback = null;
+        receiptPageUrl = null;
+        receiptRequestCode = -1;
+        if (callback != null) callback.onReceiveValue(null);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void acceptReceiptSelection(int resultCode, Intent data) {
+        final ValueCallback<Uri[]> callback = receiptCallback;
+        final String sourceUrl = receiptPageUrl;
+        final long generation = pageGeneration;
+        receiptRequestCode = -1;
+        Uri selected = data == null ? null : data.getData();
+        boolean multiple = data != null && data.getClipData() != null && data.getClipData().getItemCount() != 1;
+        if (callback == null || resultCode != RESULT_OK || selected == null || multiple || webView == null
+                || !pageLoaded || !sourceUrl.equals(webView.getUrl())
+                || !ReceiptPolicy.isExternalDocument(selected.toString(), getPackageName())) {
+            cancelReceiptPicker();
+            if (resultCode == RESULT_OK) notifyUser(R.string.receipt_invalid);
+            return;
+        }
+        fileExecutor.execute(() -> {
+            boolean permitted = false;
+            try {
+                ProviderInfo provider = getPackageManager().resolveContentProvider(selected.getAuthority(), 0);
+                if (provider != null && getPackageName().equals(provider.packageName)) throw new IOException("OWN_PROVIDER");
+                String mime = ReceiptPolicy.normalizedMime(getContentResolver().getType(selected));
+                if (mime == null) throw new IOException("RECEIPT_TYPE");
+                try (Cursor cursor = getContentResolver().query(selected, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        int sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE);
+                        if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)
+                                && !ReceiptPolicy.permittedReportedSize(cursor.getLong(sizeColumn))) throw new IOException("RECEIPT_SIZE");
+                    }
+                }
+                // Validate unknown/misreported sizes too. No receipt is copied into private app storage.
+                try (InputStream input = getContentResolver().openInputStream(selected);
+                     ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                    if (input == null) throw new IOException("NO_INPUT");
+                    byte[] buffer = new byte[8192];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        if (output.size() + count > ReceiptPolicy.MAX_BYTES) throw new IOException("RECEIPT_SIZE");
+                        output.write(buffer, 0, count);
+                    }
+                    byte[] bytes = output.toByteArray();
+                    permitted = ReceiptPolicy.matchesSignature(bytes, mime);
+                    Arrays.fill(bytes, (byte) 0);
+                }
+            } catch (IOException | RuntimeException ignored) { /* The server independently verifies every upload. */ }
+            final boolean accepted = permitted;
+            runOnUiThread(() -> {
+                if (receiptCallback != callback) return;
+                receiptCallback = null;
+                receiptPageUrl = null;
+                boolean current = !isFinishing() && !isDestroyed() && webView != null && pageLoaded
+                        && pageGeneration == generation && sourceUrl.equals(webView.getUrl());
+                callback.onReceiveValue(accepted && current ? new Uri[]{selected} : null);
+                if (current && !accepted) notifyUser(R.string.receipt_invalid);
+            });
         });
     }
 
@@ -514,6 +645,10 @@ public final class MainActivity extends Activity {
     @SuppressWarnings("deprecation")
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode >= FIRST_OPEN_RECEIPT) {
+            if (requestCode == receiptRequestCode) acceptReceiptSelection(resultCode, data);
+            return;
+        }
         if (requestCode != CREATE_DOCUMENT) return;
         PendingExport saved = pendingExport;
         pendingExport = null;
@@ -588,6 +723,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        cancelReceiptPicker();
         if (unregisterBack != null) unregisterBack.run();
         if (pendingExport != null) { Arrays.fill(pendingExport.bytes, (byte) 0); pendingExport = null; }
         fileExecutor.shutdownNow();

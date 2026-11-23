@@ -55,6 +55,19 @@ public final class UriPolicyTest {
         assertFalse(UriPolicy.isWorkspaceExport("https://other.example/api/export"));
     }
 
+    @Test public void receiptDownloadAllowsOnlyOneExactSameOriginUuidEndpoint() {
+        String path = "/api/expense-receipts/08ea7f0c-b4a6-44ae-95a1-fd8598df3378";
+        assertTrue(UriPolicy.isExpenseReceipt(UriPolicy.ORIGIN + path));
+        assertTrue(UriPolicy.isExpenseReceipt(UriPolicy.ORIGIN + ":443" + path));
+        String[] rejected = {"https://other.example" + path, "http://" + UriPolicy.HOST + path,
+                UriPolicy.ORIGIN + path + "?download=true", UriPolicy.ORIGIN + path + "#fragment",
+                UriPolicy.ORIGIN + path + "/", UriPolicy.ORIGIN + path + "/other",
+                UriPolicy.ORIGIN + "/api/expense-receipts/not-a-uuid",
+                UriPolicy.ORIGIN + "/api/expense-receipts/", UriPolicy.ORIGIN + "/api/%65xpense-receipts/08ea7f0c-b4a6-44ae-95a1-fd8598df3378",
+                "https://user@" + UriPolicy.HOST + path, UriPolicy.ORIGIN + ":444" + path};
+        for (String value : rejected) assertFalse(value, UriPolicy.isExpenseReceipt(value));
+    }
+
     @Test public void externalLinksRequireUserGestureAndSupportedSchemes() {
         assertTrue(UriPolicy.mayOpenExternal("https://example.com/document", true));
         assertTrue(UriPolicy.mayOpenExternal("tel:+919876543210", true));

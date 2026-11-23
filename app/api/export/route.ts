@@ -7,6 +7,11 @@ function exactQuantity(value: string): string {
   const magnitude = scaled < 0n ? -scaled : scaled;
   return `${scaled < 0n ? '-' : ''}${magnitude / 1000n}.${String(magnitude % 1000n).padStart(3, '0')}`;
 }
+function exactMoney(value: string): string {
+  const amount = BigInt(value);
+  const absolute = amount < 0n ? -amount : amount;
+  return `${amount < 0n ? '-' : ''}${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`;
+}
 function csvCell(value: unknown): string {
   let text = value == null ? '' : String(value);
   // Prevent spreadsheet formula execution when customer-controlled text is opened.
@@ -22,11 +27,12 @@ export async function GET(request: Request) {
       const operations = await getOperationsExport();
       headers['Content-Type'] = 'application/json; charset=utf-8';
       headers['Content-Disposition'] = `attachment; filename="smart-construction-${todayIST()}.json"`;
-      return new Response(JSON.stringify({ exportedAt: new Date().toISOString(), schemaVersion: 2, ...data, operations }, null, 2), { headers });
+      return new Response(JSON.stringify({ exportedAt: new Date().toISOString(), schemaVersion: 3, ...data, operations }, null, 2), { headers });
     }
     if (format !== 'csv') throw new CRMError('Choose JSON or CSV export.');
     const moduleName = url.searchParams.get('module') ?? 'leads';
-    const operations = ['stock', 'attendance', 'expenses'].includes(moduleName) ? await getOperationsExport() : null;
+    const operations = ['stock', 'attendance', 'expenses', 'payments', 'site_stock'].includes(moduleName) ? await getOperationsExport() : null;
+    if (moduleName === 'payments' && !operations?.extension.paymentAccounts) throw new CRMError('Only the Owner can export customer payments.', 403);
     const collections: Record<string, { headings: string[]; rows: unknown[][] }> = {
       leads: { headings: ['ID', 'Project', 'Customer ID', 'Contact', 'Phone', 'Email', 'Location', 'Status', 'Value INR', 'Owner user ID', 'Priority', 'Example', 'Created'],
         rows: data.leads.map(r => [r.id, r.title, r.customerId, r.contact, r.phone, r.email, r.location, r.status, (r.value / 100).toFixed(2), r.owner, r.priority, r.isDemo, r.createdAt]) },
@@ -39,15 +45,21 @@ export async function GET(request: Request) {
       workorders: { headings: ['ID', 'Number', 'Quotation ID', 'Title', 'Customer', 'Status', 'Owner user ID', 'Start date', 'End date', 'Total INR', 'Example'],
         rows: data.workorders.map(r => [r.id, r.number, r.quoteId, r.title, r.customerName, r.status, r.owner, r.startDate, r.endDate, (r.snapshot.totals.total / 100).toFixed(2), r.isDemo]) },
       ...(operations ? {
-        stock: { headings: ['ID', 'SKU', 'Material', 'Unit', 'Location', 'Received', 'Used', 'Adjustments', 'Remaining', 'Reorder level', 'Active'],
-          rows: operations.stockItems.map(r => [r.id, r.sku, r.name, r.unit, r.location, exactQuantity(r.receivedMilli), exactQuantity(r.usedMilli), exactQuantity(r.adjustedMilli), (r.quantityMilli / 1000).toFixed(3), (r.minQuantityMilli / 1000).toFixed(3), r.active]) },
-        attendance: { headings: ['ID', 'Employee ID', 'Employee', 'Work date IST', 'Status', 'Check-in', 'Check-out', 'Site', 'Notes', 'Source'],
-          rows: operations.attendance.map(r => [r.id, r.userId, r.memberName, r.workDate, r.status, r.checkIn, r.checkOut, r.site, r.notes, r.source]) },
+        stock: { headings: ['ID', 'SKU', 'Material', 'Unit', 'Storage note', 'Received', 'Used net of returns', 'Returned', 'Adjustments', 'Remaining', 'Reorder level', 'Active'],
+          rows: operations.stockItems.map(r => [r.id, r.sku, r.name, r.unit, r.location, exactQuantity(r.receivedMilli), exactQuantity(r.usedMilli), exactQuantity(r.returnedMilli || '0'), exactQuantity(r.adjustedMilli), (r.quantityMilli / 1000).toFixed(3), (r.minQuantityMilli / 1000).toFixed(3), r.active]) },
+        attendance: { headings: ['ID', 'Employee ID', 'Employee', 'Work date IST', 'Status', 'Check-in', 'Check-out', 'Site', 'Worked minutes', 'Expected minutes', 'Late minutes', 'Eligible overtime minutes', 'Approved overtime minutes', 'Notes', 'Source'],
+          rows: operations.attendance.map(r => [r.id, r.userId, r.memberName, r.workDate, r.status, r.checkIn, r.checkOut, r.site, r.metrics?.workedMinutes, r.metrics?.expectedMinutes, r.metrics?.lateMinutes, r.metrics?.eligibleOvertimeMinutes, r.metrics?.approvedOvertimeMinutes, r.notes, r.source]) },
         expenses: { headings: ['ID', 'Employee ID', 'Employee', 'Date', 'Description', 'Category', 'Amount INR', 'Site', 'Bill/reference', 'Notes', 'Status', 'Review note'],
           rows: operations.expenses.map(r => [r.id, r.userId, r.memberName, r.expenseDate, r.title, r.category, (r.amountPaise / 100).toFixed(2), r.site, r.reference, r.notes, r.status, r.reviewNote]) },
+        site_stock: { headings: ['Material', 'SKU', 'Site', 'Unit', 'Remaining'], rows: operations.extension.siteBalances.map(balance => {
+          const item = operations.stockItems.find(row => row.id === balance.itemId);
+          return [item?.name, item?.sku, operations.extension.sites.find(site => site.id === balance.siteId)?.name, item?.unit, exactQuantity(String(balance.quantityMilli))];
+        }) },
+        ...(operations.extension.paymentAccounts ? { payments: { headings: ['Work order', 'Title', 'Customer', 'Contract INR', 'Scheduled INR', 'Received INR', 'Outstanding INR', 'Overdue INR', 'Unallocated advance INR'],
+          rows: operations.extension.paymentAccounts.map(row => [row.number, row.title, row.customerName, exactMoney(row.contractPaise), exactMoney(row.scheduledPaise), exactMoney(row.receivedPaise), exactMoney(row.outstandingPaise), exactMoney(row.overduePaise), exactMoney(row.unallocatedPaise)]) } } : {}),
       } : {}),
     };
-    if (!Object.hasOwn(collections, moduleName)) throw new CRMError('Choose leads, customers, followups, quotations, workorders, stock, attendance or expenses.');
+    if (!Object.hasOwn(collections, moduleName)) throw new CRMError('Choose an available CRM export module.');
     const collection = collections[moduleName];
     const contents = [collection.headings, ...collection.rows].map(row => row.map(csvCell).join(',')).join('\r\n');
     headers['Content-Type'] = 'text/csv; charset=utf-8';

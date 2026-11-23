@@ -5,7 +5,7 @@ This native Android application opens the existing Smart Construction cloud CRM 
 ## Application
 
 - Application ID: `com.smartconstruction.crm`
-- Version: `1.0.0` / version code `1`
+- Version: `1.1.0` / version code `2`
 - Minimum Android: 8.0, API 26
 - Compile and target SDK: 36
 - Build tools: 36.0.0
@@ -17,6 +17,8 @@ This native Android application opens the existing Smart Construction cloud CRM 
 The launcher icon and splash use a navy/gold construction mark. A compact native header offers Refresh workspace and Open in browser. Use a quotation's Print action for Android printing or Save PDF. Android Back first lets the CRM close a dialog/drawer or return to its dashboard, then uses WebView history or closes the Activity. System-bar, cutout and keyboard insets are applied on modern Android versions. Rotation keeps the current WebView alive.
 
 An internet connection is required. The app has no offline write queue, push notifications, or background data synchronization. Native connection errors provide a retry action.
+
+Version 1.1.0 adds expense receipt selection and receipt downloads. Install the update using the same distribution signing key as 1.0.0; the application ID and existing WebView sign-in profile are retained. The CRM's other new modules load from the live website. Version 1.0.0 users can use **Open in browser** for receipt uploads until they update.
 
 ## Security and navigation
 
@@ -56,6 +58,16 @@ Open the quotation and choose its **Print** action to print or save a PDF. The C
 
 If an old System WebView lacks origin-scoped web messaging, the bridge is not installed. Update Android System WebView or use Open in browser for quotation printing and text exports.
 
+## Expense receipts
+
+The receipt file input opens Android's `ACTION_OPEN_DOCUMENT` picker for one JPG, PNG, WebP or PDF. This is available only while the current CRM page is fully loaded on the trusted origin. It does not request camera, media-library or broad storage permissions. A user can take a receipt photo with their normal camera app and select that saved file.
+
+Only a selected `content://` document is accepted. File paths, HTTP URLs, ambiguous authorities, multiple selections, the app's own content-provider authorities, and any provider owned by the app package are rejected. The native client verifies the declared type, reported size where available, bounded actual bytes and basic file signature before returning the URI to WebView. The limit is 3 MiB per receipt. This validation does not replace the server's independent signature, size, authenticated membership and expense-ownership checks. No persistent URI grant is requested and the native client does not stage the receipt in app files.
+
+The pending chooser is cancelled on page navigation, connection failure, renderer loss or Activity destruction. Results are bound to the requesting page and generation; stale picker callbacks cannot populate a later page. Cancelling the system picker returns no file.
+
+Receipt download links use only the exact same-origin `/api/expense-receipts/<UUID>` endpoint, with no query or fragment. The native request sends the current CRM cookies only to that endpoint, rejects redirects and non-200 responses, permits the same four MIME types, and checks the actual size and signature before opening the Save dialog. Filenames use a fixed safe receipt name with the matching extension. Native cookies are never forwarded to document providers or external download hosts. The endpoint rechecks the member's access on the server. Navigation during a request discards its pending bytes. The existing `/api/export` JSON flow retains its separate 8 MiB limit and the native web-message bridge still accepts only text exports.
+
 ## Build and verification
 
 Use a JDK 17 installation and an already licensed Android SDK containing platform 36 and build tools 36.0.0. Set `ANDROID_HOME` or a local uncommitted `local.properties`. SDK auto-download is disabled; the repository does not accept SDK licenses on the user's behalf.
@@ -73,7 +85,7 @@ On Windows use `gradlew.bat` with the same arguments. The GitHub Android build w
 
 Keep the release signing key outside the repository. Retain it for all future updates; changing the signing identity prevents an ordinary in-place update. The Play Console/AAB path is a separate distribution decision.
 
-Pure-Java unit tests cover trusted origin matching, deceptive hosts, userinfo, ports, unsafe schemes, incoming auth paths, exact export URLs, gesture requirements, static font exceptions, UTF-8 byte limits and export filenames. Android compilation, lint and APK generation require the actual SDK. Build success does not replace phone testing of login, an employee role, removal, keyboard behavior, rotation, Back, recovery links, CSV/JSON saves and quotation printing.
+Pure-Java unit tests cover trusted origin matching, deceptive hosts, userinfo, ports, unsafe schemes, incoming auth paths, exact export and receipt URLs, gesture requirements, static font exceptions, UTF-8 byte limits, receipt type/signature/size checks, document URI rejection and safe filenames. Android compilation, lint and APK generation require the actual SDK. Build success does not replace phone testing of login, an employee role, removal, keyboard behavior, rotation, Back, recovery links, receipt selection/cancellation/download, CSV/JSON saves and quotation printing.
 
 ## Primary references
 
@@ -83,4 +95,5 @@ Pure-Java unit tests cover trusted origin matching, deceptive hosts, userinfo, p
 - [WebMessageListener source origin and frame](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener)
 - [System-bar and cutout insets](https://developer.android.com/develop/ui/views/layout/edge-to-edge)
 - [Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)
+- [WebView file chooser and URI validation](https://developer.android.com/reference/android/webkit/WebChromeClient#onShowFileChooser(android.webkit.WebView,android.webkit.ValueCallback,android.webkit.WebChromeClient.FileChooserParams))
 - [Printing HTML documents](https://developer.android.com/training/printing/html-docs)

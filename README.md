@@ -1,6 +1,6 @@
 # smart construction CRM
 
-A private construction CRM for a team of 5–10, with leads, follow-ups, INR/GST quotations, and work orders. The responsive interface works in a phone or computer browser. Employees use their own email and password; they do not need a ChatGPT, GitHub, Vercel, or Supabase account.
+A private construction CRM for a team of 5–10, with leads, follow-ups, INR/GST quotations, work orders, site assignments, attendance, stock, private employee expenses and Owner-only customer payment tracking. The responsive interface works in a phone or computer browser. Employees use their own email and password; they do not need a ChatGPT, GitHub, Vercel, or Supabase account.
 
 ## Application stack
 
@@ -48,7 +48,7 @@ Missing configuration produces a setup-pending screen. It does not enable demo a
 | Operations | Follow-ups, existing work orders, and milestones |
 | Viewer | Read and export records; no changes |
 
-**Every active member can see and export the entire workspace.** Assignments show responsibility; they do not hide other employees' customers, prices, or work. Choose roles with that shared visibility in mind.
+**Core CRM records and stock are shared with active members.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
 
 An Owner can disable an employee immediately in **Settings → Team**. The server checks active membership on each request, so an existing authentication session cannot continue reading or changing CRM data after deactivation. Data already downloaded to a device cannot be recalled. At least one active Owner must remain, and users cannot disable themselves through the team controls.
 
@@ -64,7 +64,7 @@ There is no public self-registration screen and no first-visitor-is-owner rule. 
 - An accepted quotation can produce only one work order; its approved commercial snapshot is retained.
 - Mutations use a workspace revision and request ID to reject stale edits and safely acknowledge retries.
 - Example data is optional, visibly labelled, and loaded only by an Owner's explicit action.
-- JSON export includes the full available audit trail. CSV cells are escaped against spreadsheet formula injection.
+- Owner JSON exports include the full available audit trail; employee exports omit private administrator activity and other employees' attendance/expenses. CSV cells are escaped against spreadsheet formula injection.
 
 ## Local development and checks
 
@@ -116,6 +116,8 @@ The script designates only the supplied account, refuses to replace an existing 
 | `tests` | Business, financial and database regression tests |
 | `docs/DEPLOYMENT.md` | Browser deployment and employee onboarding |
 | `docs/MIGRATION.md` | Preservation and transfer of existing Site records |
+| `docs/OPERATIONS.md` | Sites, shifts, calendar, stock, expenses/receipts and customer payments |
+| `android/README.md` | Android app, file uploads, downloads and signed update build |
 
 ## Reference documentation
 

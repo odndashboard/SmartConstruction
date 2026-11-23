@@ -1,6 +1,7 @@
 import type { Member } from './types';
+import type { AttendanceMetrics, ExtensionAction, OperationsExtension, ShiftRule } from './operations-extensions';
 
-export type OperationsSection = 'stock' | 'attendance' | 'expenses';
+export type OperationsSection = 'stock' | 'attendance' | 'expenses' | 'payments';
 export type StockMovementType = 'IN' | 'OUT' | 'ADJUST';
 export type AttendanceStatus = 'PRESENT' | 'HALF_DAY' | 'ABSENT' | 'LEAVE';
 export type ExpenseStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'PAID' | 'WITHDRAWN';
@@ -12,17 +13,20 @@ export interface StockItem {
   id: string; sku: string; name: string; unit: string; location: string;
   quantityMilli: number; minQuantityMilli: number; active: boolean;
   receivedMilli: string; usedMilli: string; adjustedMilli: string;
+  returnedMilli?: string;
   createdBy: string; createdAt: string; updatedAt: string;
 }
 export interface StockMovement {
   id: string; itemId: string; type: StockMovementType; quantityMilli: number;
   deltaMilli: number; balanceAfterMilli: number; note: string; reference: string;
   actorId: string; actorName: string; createdAt: string;
+  siteId?: string; returnedMilli?: string; kind?: 'RETURN' | null;
 }
 export interface AttendanceRecord {
   id: string; userId: string; memberName: string; workDate: string; status: AttendanceStatus;
   checkIn: string | null; checkOut: string | null; site: string; notes: string;
   source: 'SELF' | 'ADMIN'; updatedAt: string;
+  siteId?: string | null; shiftSnapshot?: ShiftRule; metrics?: AttendanceMetrics;
 }
 export interface Expense {
   id: string; userId: string; memberName: string; expenseDate: string; title: string;
@@ -45,17 +49,18 @@ export interface OperationsData {
   expenseSummary: { month: ExpenseTotals; allTime: ExpenseTotals } | null;
   counts: { stockMovements: number; attendance: number; expenses: number };
   historyLimit: number;
+  extension: OperationsExtension;
 }
 export type OperationsAction = 'stock_item_save' | 'stock_item_active' | 'stock_move'
   | 'attendance_check_in' | 'attendance_check_out' | 'attendance_correct'
-  | 'expense_save' | 'expense_withdraw' | 'expense_review';
+  | 'expense_save' | 'expense_withdraw' | 'expense_review' | ExtensionAction;
 
 export interface OperationsMutation {
   action: OperationsAction; payload: Record<string, unknown>;
   expectedRevision: number; requestId: string; month: string;
 }
 
-export const TEAM_ACTIVITY_MODULES = ['all', 'leads', 'followups', 'quotations', 'workorders', 'customers', 'team', 'settings', 'stock', 'attendance', 'expenses'] as const;
+export const TEAM_ACTIVITY_MODULES = ['all', 'leads', 'followups', 'quotations', 'workorders', 'customers', 'team', 'settings', 'stock', 'attendance', 'expenses', 'payments'] as const;
 export type TeamActivityModule = typeof TEAM_ACTIVITY_MODULES[number];
 export interface TeamActivityEntry {
   id: string; actorId: string | null; actorName: string; action: string;

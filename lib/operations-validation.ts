@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { EXPENSE_CATEGORIES, TEAM_ACTIVITY_MODULES } from './operations-types.ts';
 import { todayIST } from './finance.ts';
+import { extensionMutationOptions } from './operations-extensions-validation.ts';
 
 const text = (max: number) => z.string().trim().max(max);
 const required = (max: number) => text(max).min(1, 'This field is required.');
@@ -51,6 +52,7 @@ const attendanceCorrectionPayload = z.object({
   userId: uuid, workDate: calendarDate, status: z.enum(['PRESENT', 'HALF_DAY', 'ABSENT', 'LEAVE']),
   checkIn: timestamp.nullable().default(null), checkOut: timestamp.nullable().default(null),
   site: optionalText(200), notes: optionalText(2000), reason: required(2000),
+  siteId: uuid.nullable().optional(),
 }).strict().superRefine((value, context) => {
   if (['ABSENT', 'LEAVE'].includes(value.status) && (value.checkIn || value.checkOut)) {
     context.addIssue({ code: 'custom', path: ['status'], message: 'Absent and leave records cannot have check-in or check-out times.' });
@@ -80,12 +82,13 @@ export const operationsMutationSchema = z.discriminatedUnion('action', [
   z.object({ ...common, action: z.literal('stock_item_save'), payload: itemPayload }).strict(),
   z.object({ ...common, action: z.literal('stock_item_active'), payload: z.object({ id: uuid, active: z.boolean() }).strict() }).strict(),
   z.object({ ...common, action: z.literal('stock_move'), payload: movementPayload }).strict(),
-  z.object({ ...common, action: z.literal('attendance_check_in'), payload: z.object({ site: optionalText(200), notes: optionalText(2000) }).strict() }).strict(),
+  z.object({ ...common, action: z.literal('attendance_check_in'), payload: z.object({ site: optionalText(200), siteId: uuid.nullable().optional(), notes: optionalText(2000) }).strict() }).strict(),
   z.object({ ...common, action: z.literal('attendance_check_out'), payload: z.object({}).strict() }).strict(),
   z.object({ ...common, action: z.literal('attendance_correct'), payload: attendanceCorrectionPayload }).strict(),
   z.object({ ...common, action: z.literal('expense_save'), payload: expensePayload }).strict(),
   z.object({ ...common, action: z.literal('expense_withdraw'), payload: z.object({ id: uuid }).strict() }).strict(),
   z.object({ ...common, action: z.literal('expense_review'), payload: reviewPayload }).strict(),
+  ...extensionMutationOptions,
 ]);
 export type ValidatedOperationsMutation = z.infer<typeof operationsMutationSchema>;
 

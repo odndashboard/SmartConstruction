@@ -26,4 +26,7 @@
     <string name="save_unavailable">No document picker is available on this device.</string>
     <string name="save_failed">The file could not be saved. Please try again.</string>
     <string name="save_success">File saved.</string>
+    <string name="receipt_invalid">Choose one JPG, PNG, WebP or PDF receipt up to 3 MB.</string>
+    <string name="receipt_failed">The receipt could not be opened. Check your access and try again.</string>
+    <string name="receipt_too_large">This receipt exceeds the 3 MB limit.</string>
 </resources>
