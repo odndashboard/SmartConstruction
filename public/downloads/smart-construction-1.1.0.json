@@ -1,0 +1,16 @@
+{
+  "name": "Smart Construction",
+  "applicationId": "com.smartconstruction.crm",
+  "versionName": "1.1.0",
+  "versionCode": 2,
+  "minimumAndroid": "8.0",
+  "minimumSdk": 26,
+  "targetSdk": 36,
+  "file": "smart-construction-1.1.0.apk",
+  "sizeBytes": 71553,
+  "sha256": "20372ddac383ec8171774c9c653b58f3ac4ca1f074bfe26f9338f44c6f8353d3",
+  "signingCertificateSha256": "BE:77:12:50:2B:8C:89:4D:6B:65:10:92:2F:D4:22:DE:DE:8F:BE:77:02:8F:20:59:9F:8C:42:51:6F:C4:CC:68",
+  "sourceCommit": "4bd4730d0ff58a3e4b1e2dcac792c82bf6ac5da9",
+  "buildRun": "https://github.com/odndashboard/SmartConstruction/actions/runs/45241885739",
+  "requiresInternet": true
+}
