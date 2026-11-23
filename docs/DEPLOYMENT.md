@@ -4,7 +4,9 @@ Only the administrator needs provider accounts. Employees receive the final CRM 
 
 ## 1. Connect the GitHub repository to Vercel
 
-Open your intended Vercel team, choose **Add New → Project**, and import `odndashboard/SmartConstruction`.
+A Vercel project has already been prepared: [smart-construction-crm](https://vercel.com/odnprints-6693s-projects/smart-construction-crm). Open that existing project and use **Settings → Git** to connect `odndashboard/SmartConstruction`; do not create a second project for this installation. See [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) for its current setup state.
+
+For a separate installation in another account, use **Add New → Project** and import the repository.
 
 If it is missing from the list, use Vercel's GitHub access/installation control and grant the **Vercel GitHub App** access to this repository under `odndashboard`. Granting the ChatGPT GitHub App access is a separate permission and does not grant Vercel access.
 
