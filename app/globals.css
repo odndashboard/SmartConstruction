@@ -80,6 +80,20 @@
 .team-member-actions{display:flex;justify-content:flex-end;align-items:center;gap:13px}
 .team-member-actions>.text-link{font-size:10px}
 .team-member-disabled{background:#fafbfc}
+.team-remove-confirmation{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:20px;margin-top:4px;padding:17px 18px;border:1px solid #eadbd4;border-radius:8px;background:#fcf7f4}
+.team-remove-confirmation>div:first-child{min-width:0;max-width:590px}
+.team-remove-confirmation strong{display:block;font-size:13px;color:#795649}
+.team-remove-confirmation p{font-size:12px;line-height:1.8;color:#927c71;margin-top:6px;overflow-wrap:anywhere}
+.team-remove-confirmation p>b{font-weight:600}
+.team-remove-confirmation-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px;flex-shrink:0}
+.team-removed-section{border-top:1px solid #e8edf1;background:#fafbfc}
+.team-removed-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:52px;padding:16px 23px;border:0;background:none;color:#8294a0;font-size:12px;text-align:left}
+.team-removed-toggle>svg{transition:transform .15s}
+.team-removed-toggle[aria-expanded=true]>svg{transform:rotate(180deg)}
+.team-removed-list>p{padding:0 23px 18px;font-size:12px;color:#93a4ae;line-height:1.7}
+.team-member-role{font-size:11px;color:#8295a3}
+.team-self-access-note{max-width:190px;font-size:10px;color:#93a4ae;line-height:1.7}
+@media(max-width:760px){.team-remove-confirmation{align-items:stretch;flex-direction:column;gap:14px}.team-remove-confirmation-actions{flex-wrap:wrap}.team-remove-confirmation .button{min-height:42px}.team-removed-toggle{padding-left:17px;padding-right:17px}.team-removed-list>p{padding-left:17px;padding-right:17px}.team-member-actions>.text-link{min-height:42px}}
 .team-manager:has(.team-member-actions) .team-members>article{grid-template-columns:36px minmax(150px,1fr) 125px 68px minmax(160px,auto)}
 .team-manager:not(:has(.team-member-actions)) .team-members>article{grid-template-columns:36px minmax(150px,1fr) 125px 68px}
 @media(max-width:1050px){.team-manager:has(.team-member-actions) .team-members>article{grid-template-columns:36px minmax(140px,1fr) 125px 68px}.team-member-actions{grid-column:2/-1;justify-content:flex-start;margin-top:-5px}.auth-story{padding-left:34px;padding-right:34px}.auth-main{padding-left:35px;padding-right:35px}}

@@ -1,0 +1,14 @@
+.root { max-width: 920px; }
+.root form { max-width: 800px; }
+.root form > :global(.inline-alert) { margin: 0 0 22px; }
+.result { padding: 18px 28px 30px; color: #4f7561; }
+.result h3 { margin: 12px 0 8px; font-size: 20px; }
+.result p { color: #657f91; line-height: 1.8; margin-bottom: 20px; }
+.result :global(.button) { width: fit-content; }
+.recovery { padding: 25px 28px; border-top: 1px solid #e7eef3; background: #f8fafb; border-radius: 0 0 14px 14px; }
+.recovery h3 { font-size: 15px; color: #496478; margin-bottom: 8px; }
+.recovery p { color: #6e8799; line-height: 1.8; max-width: 740px; font-size: 13px; }
+@media (max-width: 560px) {
+  .result, .recovery { padding: 22px 19px; }
+  .result :global(.button) { width: 100%; }
+}

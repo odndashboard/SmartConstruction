@@ -28,7 +28,7 @@ export async function POST(request: Request) {
 
     if (input.action === 'add') {
       if (before.members.some(m => m.email.toLowerCase() === input.email)) {
-        throw new CRMError('This person is already in your team. Use their password link button to create a fresh account setup link.', 409);
+        throw new CRMError('This person already has a team record. Use Reset password for an active employee, or restore their access from Removed accounts.', 409);
       }
       const { data, error } = await admin.auth.admin.generateLink({ type: 'invite', email: input.email, options: { data: { name: input.name } } });
       if (error || !data.user || !data.properties?.hashed_token) {
@@ -41,6 +41,7 @@ export async function POST(request: Request) {
       const added = await admin.rpc('crm_add_member', { p_actor_id: before.user.userId, p_user_id: targetId, p_name: input.name, p_email: input.email, p_role: input.role });
       if (added.error) throw databaseError(added.error.code);
     } else {
+      if (input.userId === before.user.userId) throw new CRMError('Change your own password in Settings → Account security.', 403);
       const member = before.members.find(m => m.userId === input.userId);
       if (!member || !member.active) throw new CRMError('Enable this team member before creating an account link.', 403);
       const authorized = await admin.rpc('crm_authorize_member_link', { p_actor_id: before.user.userId, p_user_id: member.userId });

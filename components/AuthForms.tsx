@@ -14,7 +14,7 @@ async function accountRequest(path: string, payload: Record<string, unknown>) {
 
 function ErrorMessage({ message }: { message: string }) { return message ? <div className="auth-error" role="alert"><CircleAlert size={18} /><p>{message}</p></div> : null; }
 
-export function LoginForm() {
+export function LoginForm({ passwordChanged = false }: { passwordChanged?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [help, setHelp] = useState(false);
@@ -27,7 +27,7 @@ export function LoginForm() {
       window.location.replace('/');
     } catch (e) { setError(e instanceof Error ? e.message : 'Unable to sign in.'); setBusy(false); }
   }
-  return <><form className="auth-form" onSubmit={submit}><ErrorMessage message={error} /><label className="field"><span>Work email</span><input autoComplete="username" type="email" name="email" placeholder="you@company.com" required maxLength={254} disabled={busy} /></label><label className="field"><span>Password</span><input autoComplete="current-password" type="password" name="password" placeholder="Enter your password" required maxLength={256} disabled={busy} /></label><button className="button button-primary auth-submit" disabled={busy}>{busy ? <LoaderCircle size={18} className="spin" /> : <ArrowRight size={18} />}{busy ? 'Signing in…' : 'Sign in to your workspace'}</button></form><button className="auth-help" onClick={() => setHelp(v => !v)} aria-expanded={help}>Need help signing in?</button>{help && <div className="auth-note"><strong>Ask your workspace owner</strong><p>For first-time access or a forgotten password, your owner can create a private account link in Settings → Team &amp; roles.</p></div>}<p className="auth-membership">Access is provided by your workspace owner. Use your own account on mobile or computer.</p></>;
+  return <><form className="auth-form" onSubmit={submit}>{passwordChanged && <div className="auth-note" role="status"><CheckCircle2 size={22} /><strong>Use your new password</strong><p>Your password change is complete. Sign in again to open your workspace.</p></div>}<ErrorMessage message={error} /><label className="field"><span>Work email</span><input autoComplete="username" type="email" name="email" placeholder="you@company.com" required maxLength={254} disabled={busy} /></label><label className="field"><span>Password</span><input autoComplete="current-password" type="password" name="password" placeholder="Enter your password" required maxLength={256} disabled={busy} /></label><button className="button button-primary auth-submit" disabled={busy}>{busy ? <LoaderCircle size={18} className="spin" /> : <ArrowRight size={18} />}{busy ? 'Signing in…' : 'Sign in to your workspace'}</button></form><button className="auth-help" onClick={() => setHelp(v => !v)} aria-expanded={help}>Need help signing in?</button>{help && <div className="auth-note"><strong>Ask your workspace owner</strong><p>For first-time access or a forgotten password, your owner can create a private account link in Settings → Team &amp; roles.</p></div>}<p className="auth-membership">Access is provided by your workspace owner. Use your own account on mobile or computer.</p></>;
 }
 
 export function ConfirmAccountForm() {

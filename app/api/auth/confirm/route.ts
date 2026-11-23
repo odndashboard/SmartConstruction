@@ -3,6 +3,7 @@ import { createAuthClient } from '@/lib/supabase/server';
 import { readAuthInput, authResponse, authError } from '@/lib/auth-http';
 import { getWorkspace, CRMError } from '@/lib/server';
 import { ACCOUNT_TOKEN_PATTERN } from '@/lib/auth-policy';
+import { clearPasswordSetup, grantPasswordSetup } from '@/lib/password-setup';
 
 export const dynamic = 'force-dynamic';
 const schema = z.object({ token_hash: z.string().regex(ACCOUNT_TOKEN_PATTERN, 'This account link is not valid.'), type: z.enum(['invite', 'recovery']) }).strict();
@@ -11,10 +12,14 @@ const schema = z.object({ token_hash: z.string().regex(ACCOUNT_TOKEN_PATTERN, 'T
 export async function POST(request: Request) {
   try {
     const input = await readAuthInput(request, schema);
+    await clearPasswordSetup();
     const client = await createAuthClient();
     const { error } = await client.auth.verifyOtp(input);
     if (error) throw new CRMError('This account link has expired or has already been used. Ask your workspace owner for a new one.', 400);
-    try { await getWorkspace(); }
+    try {
+      const workspace = await getWorkspace();
+      await grantPasswordSetup(client, workspace.user.userId);
+    }
     catch (workspaceError) {
       await client.auth.signOut({ scope: 'local' });
       if (!(workspaceError instanceof CRMError) || workspaceError.status !== 403) throw workspaceError;

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createAuthClient } from '@/lib/supabase/server';
 import { readAuthInput, authResponse, authError } from '@/lib/auth-http';
 import { getWorkspace, CRMError } from '@/lib/server';
+import { clearPasswordSetup } from '@/lib/password-setup';
 
 export const dynamic = 'force-dynamic';
 const schema = z.object({ email: z.string().trim().email('Enter a valid email address.').max(254), password: z.string().min(1, 'Enter your password.').max(256) }).strict();
@@ -9,6 +10,7 @@ const schema = z.object({ email: z.string().trim().email('Enter a valid email ad
 export async function POST(request: Request) {
   try {
     const input = await readAuthInput(request, schema);
+    await clearPasswordSetup();
     const client = await createAuthClient();
     const { error } = await client.auth.signInWithPassword(input);
     if (error) throw new CRMError(error.status === 429 ? 'Too many sign-in attempts. Wait a moment and try again.' : 'The email or password is incorrect, or this account is not ready yet.', error.status === 429 ? 429 : 401);

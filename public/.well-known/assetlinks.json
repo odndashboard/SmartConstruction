@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.smartconstruction.crm",
+      "sha256_cert_fingerprints": [
+        "BE:77:12:50:2B:8C:89:4D:6B:65:10:92:2F:D4:22:DE:DE:8F:BE:77:02:8F:20:59:9F:8C:42:51:6F:C4:CC:68"
+      ]
+    }
+  }
+]

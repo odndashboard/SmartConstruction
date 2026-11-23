@@ -12,6 +12,8 @@ import type { Customer, FollowUp, Lead, LeadStatus, Quotation, QuoteItemInput, Q
 import { LEAD_STAGES, ROLE_LABELS } from '@/lib/types';
 import { computeQuote, formatINR, STATE_OPTIONS, todayIST } from '@/lib/finance';
 import TeamSettings from './TeamSettings';
+import AccountSecurity from './AccountSecurity';
+import { saveTextFile, printDocument } from '@/lib/native-platform';
 import { SignOutButton } from './AuthForms';
 
 type Section = 'dashboard' | 'leads' | 'followups' | 'quotations' | 'workorders' | 'customers' | 'settings';
@@ -104,8 +106,7 @@ function downloadCSV(title: string, rows: Record<string, unknown>[]) {
   const keys = Object.keys(rows[0]);
   const cell = (value: unknown) => { let s = String(value ?? ''); if (/^[\s]*[=+\-@]/.test(s)) s = `'${s}`; return `"${s.replace(/"/g, '""')}"`; };
   const text = '\uFEFF' + [keys, ...rows.map(row => keys.map(key => row[key]))].map(row => row.map(cell).join(',')).join('\r\n');
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8;' }));
-  const link = document.createElement('a'); link.href = url; link.download = `smart-construction-${title}-${todayIST()}.csv`; link.click(); URL.revokeObjectURL(url);
+  saveTextFile(`smart-construction-${title}-${todayIST()}.csv`, text, 'text/csv;charset=utf-8;');
 }
 
 export default function CRMApp() {
@@ -192,7 +193,7 @@ export default function CRMApp() {
     if (status === 'LOST') { open({ type: 'lead_lost', id: lead.id }); return; }
     await mutate('lead_status', { id: lead.id, status }, false);
   };
-  const print = (quote: Quotation) => { setPrintQuote(quote); requestAnimationFrame(() => requestAnimationFrame(() => window.print())); };
+  const print = (quote: Quotation) => { setPrintQuote(quote); requestAnimationFrame(() => requestAnimationFrame(() => printDocument())); };
   const exportList = () => {
     const count = ({ leads: leadRecords.length, customers: data.customers.length, quotations: data.quotations.length, workorders: data.workorders.length, followups: data.followups.length } as Record<string, number>)[section] || 0;
     if (!count) { setToast('There are no records to export in this view.'); return; }
@@ -354,9 +355,10 @@ function WorkDetail({ item: w, data, delivery, open, busy, mutate }: { item: Wor
 function SettingsView({ data, owner, busy, mutate, open, onUpdated }: { data: WorkspaceData; owner: boolean; busy: boolean; mutate: Mutation; open: OpenModal; onUpdated: (value: WorkspaceData) => void }) {
   const [settingsTab, setSettingsTab] = useState('company');
   const c = data.company;
-  return <><div className="list-toolbar"><div className="tabs">{[['company', 'Company details'], ['team', 'Team & roles'], ['activity', 'Activity log'], ['data', 'Workspace data']].map(([code, title]) => <button key={code} className={settingsTab === code ? 'selected' : ''} onClick={() => setSettingsTab(code)}>{title}</button>)}</div></div>
+  return <><div className="list-toolbar"><div className="tabs">{[['company', 'Company details'], ['team', 'Team & roles'], ['security', 'Account security'], ['activity', 'Activity log'], ['data', 'Workspace data']].map(([code, title]) => <button key={code} className={settingsTab === code ? 'selected' : ''} onClick={() => setSettingsTab(code)}>{title}</button>)}</div></div>
     {settingsTab === 'company' && <section className="panel settings-panel"><PanelHeader title="Make it your workspace" eyebrow="COMPANY & GST" /><p className="settings-intro">Your legal details appear on issued quotations. Currency is INR and the workspace uses India Standard Time.</p><form key={data.revision} onSubmit={e => { e.preventDefault(); void mutate('company_save', Object.fromEntries(new FormData(e.currentTarget).entries()), false); }}><fieldset disabled={!owner || busy}><div className="form-grid"><Field label="Company display name *"><input name="name" required defaultValue={c.name} /></Field><Field label="Registered legal name"><input name="legalName" defaultValue={c.legalName} placeholder="As on the GST registration" /></Field><Field label="GSTIN" hint="Use your actual registration, not example details."><input name="gstin" defaultValue={c.gstin} maxLength={15} className="uppercase-input" /></Field><Field label="Registration state"><select name="stateCode" defaultValue={c.stateCode}><StateOptions /></select></Field><Field label="Registered address" wide><textarea name="address" rows={3} defaultValue={c.address} /></Field><Field label="Business phone"><input name="phone" type="tel" defaultValue={c.phone} /></Field><Field label="Business email"><input name="email" type="email" defaultValue={c.email} /></Field><Field label="Website"><input name="website" defaultValue={c.website} placeholder="https://" /></Field><Field label="Currency & timezone"><input readOnly value="INR (₹) · Asia/Kolkata" /></Field><Field label="Default quotation terms" wide><textarea name="terms" rows={4} defaultValue={c.terms} /></Field></div></fieldset><div className="settings-form-footer"><span><ShieldCheck size={16} />{owner ? 'Only workspace owners can change company details.' : 'Your owner manages company details.'}</span>{owner && <button className="button button-primary" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}Save company details</button>}</div></form></section>}
     {settingsTab === 'team' && <TeamSettings data={data} owner={owner} busy={busy} mutate={mutate} onUpdated={onUpdated} />}
+    {settingsTab === 'security' && <AccountSecurity email={data.user.email} owner={owner} />}
     {settingsTab === 'activity' && <section className="panel"><PanelHeader title="Workspace activity" eyebrow="A CLEAR RECORD" />{data.activity.length ? <div className="activity-list">{[...data.activity].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(a => <article key={a.id}><span className="activity-dot" /><div><strong>{a.description || a.action.replaceAll('_', ' ')}</strong><small>{data.members.find(m => m.userId === a.actor)?.name || a.actor} · {displayDate(a.createdAt)} at {displayTime(a.createdAt)}</small></div><span>{a.entityType}</span></article>)}</div> : <Empty icon={Clock3} title="Your workspace history starts here" detail="Changes to customers, projects and documents will appear as your team works." />}</section>}
     {settingsTab === 'data' && <section className="panel data-settings"><PanelHeader title="Your workspace data" /><div><span className="settings-feature-icon"><Download size={23} /></span><h3>Export your records</h3><p>Download the current workspace as JSON. Keep exports securely; they contain your business and customer information.</p><a className="button button-secondary" href="/api/export"><Download size={16} />Export workspace</a></div>{owner && <div><span className="settings-feature-icon"><Sparkles size={23} /></span><h3>Explore with examples</h3><p>Load clearly labelled sample projects to try the workflow. Real records and company settings are preserved.</p><div className="heading-actions"><button className="button button-secondary" onClick={() => open({ type: 'load_demo' })}>Load example workspace</button>{data.leads.some(l => l.isDemo) && <button className="text-link danger-text" onClick={() => open({ type: 'clear_demo' })}>Clear example records</button>}</div></div>}</section>}
   </>;
