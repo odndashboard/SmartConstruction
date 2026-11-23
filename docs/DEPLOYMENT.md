@@ -2,31 +2,41 @@
 
 Only the administrator needs provider accounts. Employees receive the final CRM URL and their own private activation link.
 
-## 1. Connect the GitHub repository to Vercel
+## 1. Use the intended Vercel project
 
-A Vercel project has already been prepared: [smart-construction-crm](https://vercel.com/odnprints-6693s-projects/smart-construction-crm). Open that existing project and use **Settings → Git** to connect `odndashboard/SmartConstruction`; do not create a second project for this installation. See [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) for its current setup state.
+Use [smart-construction-dashboard](https://vercel.com/dash-board10/smart-construction-dashboard) in **DashBoard (`dash-board10`)**. It is linked to `odndashboard/SmartConstruction` with production branch `main`. The assigned production origin is `https://smart-construction-dashboard.vercel.app`. See [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) for the verified deployment and remaining setup work.
 
-For a separate installation in another account, use **Add New → Project** and import the repository.
+Leave the older `smart-construction-crm` project under `odnprints-6693s-projects` untouched. Use the existing Dashboard project for this installation.
 
-If it is missing from the list, use Vercel's GitHub access/installation control and grant the **Vercel GitHub App** access to this repository under `odndashboard`. Granting the ChatGPT GitHub App access is a separate permission and does not grant Vercel access.
+For future Git relinking, use **Settings → Git**. Vercel's GitHub App must have access to the repository under `odndashboard`; access granted to the ChatGPT GitHub App is a separate permission.
 
-Use the **Next.js** framework preset, the repository root, install command `npm ci`, and build command `npm run build`. Do not select static export or a `dist` output directory. Record the stable production domain Vercel assigns to the project.
+Use the **Next.js** framework preset, **Node 24.x**, the repository root, install command `npm ci`, and build command `npm run build`. Keep the default Next.js output.
 
-## 2. Prepare the intended Supabase project
+## 2. Verify the intended Supabase project and configure Auth
 
-Open the Supabase project you want to use for the CRM. Use a new/dedicated database if the current project belongs to another application.
+The selected database is **ODN → Smart Construction dashboard**, project [`ynyepmlpwpndpxwzqtcb`](https://supabase.com/dashboard/project/ynyepmlpwpndpxwzqtcb).
 
-In the project's SQL Editor, open and run the entire file in `supabase/migrations/` ending in `_crm.sql`. The migration is one transaction. It creates the private `crm` schema and restricted public RPC functions; it does not seed sample customers or public access policies.
+The SQL in `supabase/migrations/202611230001_crm.sql` has already been applied, recorded remotely as migration name `crm`, version `20261123115055`. **Do not run the initialization file again.** It is not idempotent. Retain the repository-to-remote version mapping in [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) when comparing future migration history.
 
-The Supabase Data API must be enabled with `public` exposed so the server can call those RPC functions. **Do not expose the `crm` schema** and do not grant anon/authenticated access to its tables or RPCs.
+For a separate installation, inspect the existing `crm` schema, CRM functions, and migration history first. Apply the entire initialization file once only when that CRM has not been initialized. Verify existing objects instead of dropping or recreating them.
 
-In Authentication settings, keep email/password sign-in enabled and disable public signups. Set a minimum password length of at least 12 characters. Configure the Site URL to the stable CRM origin and add the exact `/auth/confirm` URL to the allowed redirect list. If using a staging deployment, configure its exact origin separately.
+The Supabase Data API must be enabled with `public` exposed so the server can call the restricted RPC functions. **Keep `crm` unexposed** and do not grant direct table access to `anon`, `authenticated`, or `service_role`. The existing RPC grants are deliberate.
 
-The app creates manual invitation/recovery links; Supabase's default email service is not a production employee mail service. Do not promise that an invitation was emailed when using this version.
+In Authentication settings:
+
+- Keep email/password sign-in enabled.
+- Disable public registration and anonymous sign-in.
+- Require passwords of at least 12 characters.
+- Set the Site URL to `https://smart-construction-dashboard.vercel.app`.
+- Allow the exact redirect `https://smart-construction-dashboard.vercel.app/auth/confirm`.
+
+Configure a separate staging installation's origin and database independently.
+
+The app generates manual invitation/recovery links. This version does not automatically email employee invitations; share each private link directly with its intended recipient.
 
 ## 3. Set Vercel environment variables
 
-In Vercel **Project → Settings → Environment Variables**, add:
+Open the intended project's [Vercel environment settings](https://vercel.com/dash-board10/smart-construction-dashboard/settings/environment-variables). The three non-secret Production values below are already configured; add the remaining `SUPABASE_SECRET_KEY` as a Production Secret and verify the others:
 
 | Key | Where its value comes from |
 |---|---|

@@ -1,60 +1,83 @@
 # Deployment status — 23 November 2026
 
-## Intended destination
+**The CRM is deployed in the intended Vercel team and its database is initialized. Employee login is not operational yet.** The application currently displays its setup-pending page.
 
-- Repository: [odndashboard/SmartConstruction](https://github.com/odndashboard/SmartConstruction), branch `main`.
-- Vercel team selected by the user: **`dash-board10`** ([team settings](https://vercel.com/dash-board10/~/settings)).
-- Target team ID reported by Vercel: `team_AYTyR9qg0mp8KhJogq2T3x8y`.
-- Supabase project selected by the user: **`ynyepmlpwpndpxwzqtcb`** ([SQL Editor](https://supabase.com/dashboard/project/ynyepmlpwpndpxwzqtcb/sql)).
-- Goal: employees sign into the CRM with their own email/password on mobile or computer, without ChatGPT, GitHub, Vercel, or Supabase accounts.
+## Verified destination
 
-This destination supersedes the earlier setup deployment's account references. **No working employee URL under `dash-board10` has been verified.**
+| Component | Verified destination |
+|---|---|
+| Repository | [odndashboard/SmartConstruction](https://github.com/odndashboard/SmartConstruction), production branch `main` |
+| Vercel team | **DashBoard — `dash-board10`** |
+| Vercel project | [smart-construction-dashboard](https://vercel.com/dash-board10/smart-construction-dashboard) |
+| Project ID | `prj_3NKVhtMYQg2FZOT6Htt4IkFP8O3G` |
+| Production address | [smart-construction-dashboard.vercel.app](https://smart-construction-dashboard.vercel.app) |
+| Supabase | **ODN → Smart Construction dashboard** |
+| Supabase project | [`ynyepmlpwpndpxwzqtcb`](https://supabase.com/dashboard/project/ynyepmlpwpndpxwzqtcb), `ACTIVE_HEALTHY` |
 
-## Prepared and verified
+The user approved the Vercel team grant. Both Dashboard connections are verified. The Vercel project is linked to the intended GitHub repository.
 
-- Application source commit: `71ecb4bf3145fdcce1f0e55d38aabab299366e71`.
-- Predeployment review confirmed `main` at `698b10ee0d6810239fdce9d363d39366f8f5d2f0`; that commit changes documentation only.
-- Local checks previously passed: 60 tests, clean lint, successful Next.js 16.4.6 production build, and zero reported production dependency vulnerabilities.
-- The [SQL migration](../supabase/migrations/202611230001_crm.sql), [deployment guide](DEPLOYMENT.md), environment template, and Owner bootstrap script were reviewed again before attempting account setup.
-- The selected Supabase project's live database and Auth configuration have not been inspected or changed by this deployment session.
+## First verified deployment
 
-## Confirmed access blockers
+- Source commit: `81cf414081e660c7a069a6c907539278b4d620eb`.
+- Deployment ID: `dpl_8JYLvyZDtXBf9SSJJocYef7Wgghs`.
+- Deployment URL: `https://smart-construction-dashboard-1weyx9qer-dash-board10.vercel.app`.
+- Vercel reported **READY**, with target **production**, Next.js, and Node **24.x**.
+- An authenticated Vercel fetch of the production address returned **HTTP 200** and the expected setup-pending page.
+- Vercel deployment protection remains enabled with `all_except_custom_domains`.
 
-The connected Vercel identity is `odnprints-6693`. Its team listing exposes only `odnprints-6693s-projects`.
+This verifies the hosted build and setup-page response. Real authentication and access without a Vercel account remain unverified.
 
-A project lookup explicitly scoped to `dash-board10` returned **403: not authorized**. Vercel suggested its team-consent flow. That flow was attempted with both the exact team ID returned by Vercel and the user-supplied slug; both attempts returned **404: Team not found**. No consent link was issued and access was not granted.
+The application code is unchanged from the previously validated implementation: 60 passing tests, clean lint, a successful Next.js 16.4.6 production build, and zero reported production dependency vulnerabilities. Those local checks were not repeated for documentation-only changes.
 
-The Chrome connection available to this conversation also returned: “Browser access requires the originating browser context.” Being signed into Vercel in a separate Chrome window does not establish access for this connection.
+## Supabase migration completed
 
-No Supabase connection is available in this conversation. The Supabase integration was offered for installation/connection; no successful connection has yet been verified.
+The selected project had no CRM schema, CRM functions, migrations, or Auth users before initialization. The existing [CRM SQL migration](../supabase/migrations/202611230001_crm.sql) was applied successfully.
 
-To resume, establish Vercel access through an identity authorized for `dash-board10`, and grant Supabase access to `ynyepmlpwpndpxwzqtcb`. Retry the same explicitly scoped requests after connection. Do not substitute another Vercel team.
+| Migration identifier | Recorded value |
+|---|---|
+| Repository file | `supabase/migrations/202611230001_crm.sql` |
+| Source blob | `52996302b7d00eb29faf4a7b8b741e3218ef8e53` |
+| Remote migration name | `crm` |
+| Remote migration version | `20261123115055` |
 
-## Previous setup deployment — leave untouched
+**The initialization SQL has already run and is not idempotent.** Preserve this mapping when comparing repository files with remote migration history. Reconcile the different version identifiers deliberately before adopting CLI migration workflows; do not rerun initialization or automatically repair history.
 
-The following deployment was prepared under a different account before the intended destination was clarified:
+Live SQL verification confirmed:
 
-- Vercel project: [smart-construction-crm](https://vercel.com/odnprints-6693s-projects/smart-construction-crm).
-- Address: [smart-construction-crm.vercel.app](https://smart-construction-crm.vercel.app).
-- Deployment: `dpl_AMfKodeMzr1pW5wXTpjVkGMSQQPb`, previously reported **READY**.
-- Its hosted build succeeded; an authenticated Vercel fetch previously returned HTTP 200 and the setup-pending screen.
-- Its existing Vercel deployment protection remains as last observed. Employee sign-in and shared business storage were not configured.
-- A production `APP_URL` was set there after deployment. That value must not be reused for the new destination.
-- Its source was deployed directly through the Vercel API. Automatic GitHub deployments were not established.
+- Nine private `crm` tables, each with row-level security enabled.
+- No direct CRM schema/table privileges for `anon`, `authenticated`, or `service_role`.
+- Seven public CRM RPCs with `SECURITY DEFINER`, empty `search_path`, and execution allowed only for `service_role` among application roles.
+- Workspace defaults: **smart construction**, **INR**, **Asia/Kolkata**, revision **0**.
+- Zero business records, CRM members, and Auth users.
+- Owner bootstrap status: **false**.
 
-Do not delete, transfer, configure, or use this older project as the employee destination without a separate user instruction.
+Security advisors reported nine informational `rls_enabled_no_policy` notices and no warning or error findings. The notices match the private server-only design: direct table access is deliberately denied, and the server uses restricted RPCs.
 
-## Resume deployment after access is established
+## Production environment configuration
 
-1. Inspect existing projects in `dash-board10` to avoid creating a duplicate. Import or link `odndashboard/SmartConstruction`, branch `main`, from the repository root. Use Next.js, Node 24.x, `npm ci`, and `npm run build`. Record the actual stable production origin.
-2. Confirm the selected Supabase project and inspect its existing `crm` objects and `public.crm_*` functions before running SQL. The 545-line migration is one transaction but **is not repeatable/idempotent**. Run it once only if the intended CRM has not been initialized. Never drop existing objects to make it run.
-3. Configure the four production variables from the verified project settings: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, server-only `SUPABASE_SECRET_KEY`, and `APP_URL` set to the exact new production HTTPS origin. Legacy aliases are documented in [.env.example](../.env.example). Keep secret values out of chat, GitHub, and logs; do not give preview deployments the production credentials.
-4. Apply or verify the schema after project linkage and environment configuration. Expected result: nine private `crm` tables with RLS and seven public RPCs restricted to `service_role`. Keep `crm` unexposed in the Data API.
-5. Enable email/password authentication, disable public registration for the intended CRM project, require passwords of at least 12 characters, set the Auth Site URL to the production origin, and allow the exact `<APP_URL>/auth/confirm` redirect. Check for unrelated applications before changing shared Auth settings.
-6. Redeploy with the production configuration. Create or identify the explicitly designated Owner Auth user, then bootstrap its exact UUID using [DEPLOYMENT.md](DEPLOYMENT.md). The user has not yet designated the Owner email in this conversation; do not infer it from GitHub or Vercel account identities. If membership already exists, inspect it instead of resetting or rerunning bootstrap.
-7. Complete live verification before onboarding staff: Owner and employee login/logout, activation/password changes, role restrictions, disabled-user access with an existing session, lead and follow-up persistence, quotation acceptance into exactly one work order, stale-revision conflicts, and mobile/desktop use.
-8. Configure production deployment protection so the stable CRM URL reaches the application's login without a Vercel account. Add real employees only after verification and share each private setup link with its intended employee. The application does not automatically email invitations.
+| Variable | Verified status |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Present; selected project's verified URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Present; modern publishable key |
+| `APP_URL` | Present; `https://smart-construction-dashboard.vercel.app` |
+| `SUPABASE_SECRET_KEY` | **Missing** |
 
-All active CRM members currently read/export the whole workspace; assignments do not restrict record visibility. Confirm actual company GSTIN and state details before issuing real GST quotations.
+The three configured values were saved after the first deployment. A later deployment is required to pick up changed environment values.
 
-No real employee accounts have been created or invitations sent by this deployment session. No original ChatGPT Site database records have been copied. If records must be retained, follow [MIGRATION.md](MIGRATION.md) before switching staff.
+The available Supabase methods do not retrieve the server secret or edit hosted Auth configuration. The Chrome connection also remains unavailable to this conversation. Enter the server key directly into the intended Vercel project's Production secret settings; keep it out of chat, source control, logs, and preview environments.
+
+## Remaining work
+
+1. Add the selected project's server-only `SUPABASE_SECRET_KEY` to Production.
+2. Configure Supabase Auth: email/password enabled; public registration and anonymous sign-in disabled; minimum password length 12; Site URL `https://smart-construction-dashboard.vercel.app`; exact allowed redirect `https://smart-construction-dashboard.vercel.app/auth/confirm`.
+3. Create the explicitly designated Owner through Supabase Auth and bootstrap its exact UUID using [DEPLOYMENT.md](DEPLOYMENT.md). The Owner email has not been designated; provider account identities are not an Owner selection.
+4. Redeploy and verify Owner/employee login, activation and password flows, permissions, disabled-member access, shared persistence, quotation-to-work-order conversion, concurrent edits, and mobile/desktop behavior.
+5. Configure production deployment protection so employees reach the CRM login without a Vercel account. Admit real employees only after verification.
+
+## Previous installation and records
+
+The older [smart-construction-crm project under odnprints-6693s-projects](https://vercel.com/odnprints-6693s-projects/smart-construction-crm) was left untouched. It is not the intended employee deployment.
+
+No real employees were created and no invitations were sent. No original ChatGPT Site records were copied; follow [MIGRATION.md](MIGRATION.md) if records must be retained.
+
+All active CRM roles can read and export the workspace; assignments do not restrict visibility. Complete the actual company GSTIN and state details before issuing real GST quotations.
