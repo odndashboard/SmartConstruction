@@ -36,7 +36,7 @@ The app generates manual invitation/recovery links. This version does not automa
 
 ## 3. Set Vercel environment variables
 
-Open the intended project's [Vercel environment settings](https://vercel.com/dash-board10/smart-construction-dashboard/settings/environment-variables). The three non-secret Production values below are already configured; add the remaining `SUPABASE_SECRET_KEY` as a Production Secret and verify the others:
+Open the intended project's [Vercel environment settings](https://vercel.com/dash-board10/smart-construction-dashboard/settings/environment-variables). All four Production variables below are configured, and a redeployment has verified that the login form is available. Keep the server key as a Production Secret when maintaining these settings:
 
 | Key | Where its value comes from |
 |---|---|

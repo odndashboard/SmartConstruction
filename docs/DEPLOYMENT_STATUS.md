@@ -1,6 +1,6 @@
 # Deployment status — 23 November 2026
 
-**The CRM is deployed in the intended Vercel team and its database is initialized. Employee login is not operational yet.** The application currently displays its setup-pending page.
+**The CRM is deployed in the intended Vercel team, its database is initialized, and its production login form is available. Owner account creation and authenticated employee verification remain pending.**
 
 ## Verified destination
 
@@ -15,6 +15,18 @@
 | Supabase project | [`ynyepmlpwpndpxwzqtcb`](https://supabase.com/dashboard/project/ynyepmlpwpndpxwzqtcb), `ACTIVE_HEALTHY` |
 
 The user approved the Vercel team grant. Both Dashboard connections are verified. The Vercel project is linked to the intended GitHub repository.
+
+## Verification after the private key was saved
+
+- All four required Production environment variable names are present. `SUPABASE_SECRET_KEY` is stored as a Vercel Production Secret (`sensitive`); its value was not retrieved or printed.
+- Redeployment `dpl_5TyVnMas9HWDoRG4Ltw3g4h7uRgJ` reached **READY** with target **production**, using source commit `9285d807d38708c71aed49e6ca6111698fb893cf`.
+- A fresh unauthenticated HTTPS request to `https://smart-construction-dashboard.vercel.app/login` returned **HTTP 200** on the CRM domain, with email and password fields and without the setup-pending message.
+- Reaching the production login page does not require a Vercel account. No deployment-protection settings were changed for this check.
+- Supabase still has zero Auth users, zero CRM members, and zero active Owners.
+- Supabase's public Auth settings report email sign-in enabled, anonymous sign-in disabled, email confirmation required, and **public registration still enabled**.
+- The public Auth settings endpoint does not expose minimum password length, Site URL, or redirect allowlist; those settings remain unverified.
+
+The login-form check establishes that the application configuration gate passes. It does not verify the server key's permissions through a real authenticated CRM session or establish working employee access.
 
 ## First verified deployment
 
@@ -60,19 +72,18 @@ Security advisors reported nine informational `rls_enabled_no_policy` notices an
 | `NEXT_PUBLIC_SUPABASE_URL` | Present; selected project's verified URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Present; modern publishable key |
 | `APP_URL` | Present; `https://smart-construction-dashboard.vercel.app` |
-| `SUPABASE_SECRET_KEY` | **Missing** |
+| `SUPABASE_SECRET_KEY` | Present; Production Secret (`sensitive`), value not read |
 
-The three configured values were saved after the first deployment. A later deployment is required to pick up changed environment values.
+The production redeployment after the private key was saved loaded the updated configuration and rendered the login form. Future environment changes also require a new deployment.
 
-The available Supabase methods do not retrieve the server secret or edit hosted Auth configuration. The Chrome connection also remains unavailable to this conversation. Enter the server key directly into the intended Vercel project's Production secret settings; keep it out of chat, source control, logs, and preview environments.
+The available Supabase methods do not edit hosted Auth configuration or create Auth users. The Chrome connection remains unavailable to this conversation. Complete those provider settings in the Supabase dashboard; keep passwords and private key values out of chat, source control, logs, and preview environments.
 
 ## Remaining work
 
-1. Add the selected project's server-only `SUPABASE_SECRET_KEY` to Production.
-2. Configure Supabase Auth: email/password enabled; public registration and anonymous sign-in disabled; minimum password length 12; Site URL `https://smart-construction-dashboard.vercel.app`; exact allowed redirect `https://smart-construction-dashboard.vercel.app/auth/confirm`.
-3. Create the explicitly designated Owner through Supabase Auth and bootstrap its exact UUID using [DEPLOYMENT.md](DEPLOYMENT.md). The Owner email has not been designated; provider account identities are not an Owner selection.
-4. Redeploy and verify Owner/employee login, activation and password flows, permissions, disabled-member access, shared persistence, quotation-to-work-order conversion, concurrent edits, and mobile/desktop behavior.
-5. Configure production deployment protection so employees reach the CRM login without a Vercel account. Admit real employees only after verification.
+1. Disable public registration in Supabase Auth. Verify email/password remains enabled, anonymous sign-in remains disabled, the minimum password length is at least 12, Site URL is `https://smart-construction-dashboard.vercel.app`, and the exact allowed redirect is `https://smart-construction-dashboard.vercel.app/auth/confirm`.
+2. Create the explicitly designated Owner through Supabase Auth and bootstrap its exact UUID using [DEPLOYMENT.md](DEPLOYMENT.md). The Owner email has not been designated; provider account identities are not an Owner selection.
+3. Verify Owner/employee login, activation and password flows, permissions, disabled-member access, shared persistence, quotation-to-work-order conversion, concurrent edits, and mobile/desktop behavior.
+4. Onboard real employees after those checks pass. Preserve access to the CRM login without requiring a Vercel account.
 
 ## Previous installation and records
 
