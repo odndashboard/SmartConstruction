@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
 import {
   LayoutDashboard, UsersRound, CalendarClock, FileText, HardHat, ContactRound, Settings2,
   Search, Bell, Plus, ArrowUpRight, ChevronRight, ChevronDown, X, Check, Phone, Mail,
@@ -11,19 +12,38 @@ import {
 import type { Customer, FollowUp, Lead, LeadStatus, Quotation, QuoteItemInput, QuoteTotals, WorkOrder, WorkspaceData } from '@/lib/types';
 import { LEAD_STAGES, ROLE_LABELS } from '@/lib/types';
 import { computeQuote, formatINR, STATE_OPTIONS, todayIST } from '@/lib/finance';
-import TeamSettings from './TeamSettings';
-import AccountSecurity from './AccountSecurity';
-import OperationsPanel from './OperationsPanel';
-import TeamActivityPanel from './TeamActivityPanel';
-import DashboardOverview from './DashboardOverview';
-import type { OperationsSection } from '@/lib/operations-types';
+import DashboardOverview, { type OverviewBootstrap } from './DashboardOverview';
+import type { OperationsData, OperationsSection } from '@/lib/operations-types';
 import { saveTextFile, printDocument } from '@/lib/native-platform';
 import { readJson } from '@/lib/client-read';
-import { SignOutButton } from './AuthForms';
+import { SignOutButton } from './SignOutButton';
+
+function TabLoading() {
+  return <div className="empty-state" role="status"><LoaderCircle size={22} className="spin" /><p>Opening this section…</p></div>;
+}
+const TeamSettings = dynamic(() => import('./TeamSettings'), { loading: TabLoading });
+const AccountSecurity = dynamic(() => import('./AccountSecurity'), { loading: TabLoading });
+const OperationsPanel = dynamic(() => import('./OperationsPanel'), { loading: TabLoading });
+const TeamActivityPanel = dynamic(() => import('./TeamActivityPanel'), { loading: TabLoading });
 
 type Section = 'dashboard' | 'leads' | 'followups' | 'quotations' | 'workorders' | 'customers' | 'settings' | 'team_activity' | OperationsSection;
 type ModalState = { type: string; id?: string; leadId?: string; workId?: string } | null;
 type Mutation = (action: string, payload: Record<string, unknown>, close?: boolean) => Promise<WorkspaceData | undefined>;
+type CRMAppProps = {
+  initialWorkspace?: WorkspaceData | null;
+  initialOperations?: OperationsData | null;
+  initialOperationsError?: string;
+  initialError?: string;
+};
+function preloadSection(section: Section) {
+  // Load code on navigation intent; private records still require their live API read.
+  if (section === 'stock' || section === 'attendance' || section === 'expenses' || section === 'payments') void import('./OperationsPanel').catch(() => undefined);
+  if (section === 'team_activity') void import('./TeamActivityPanel').catch(() => undefined);
+  if (section === 'settings') {
+    void import('./TeamSettings').catch(() => undefined);
+    void import('./AccountSecurity').catch(() => undefined);
+  }
+}
 const NAV: { key: Section; label: string; icon: typeof LayoutDashboard; adminOnly?: boolean }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'leads', label: 'Leads', icon: UsersRound },
@@ -119,10 +139,15 @@ function downloadCSV(title: string, rows: Record<string, unknown>[]) {
   saveTextFile(`smart-construction-${title}-${todayIST()}.csv`, text, 'text/csv;charset=utf-8;');
 }
 
-export default function CRMApp() {
-  const [data, setData] = useState<WorkspaceData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+export default function CRMApp({ initialWorkspace = null, initialOperations = null, initialOperationsError = '', initialError = '' }: CRMAppProps = {}) {
+  const [data, setData] = useState<WorkspaceData | null>(initialWorkspace);
+  const [loading, setLoading] = useState(!initialWorkspace && !initialError);
+  const [loadError, setLoadError] = useState(initialError);
+  const [initialOverview, setInitialOverview] = useState<OverviewBootstrap | null>(() => initialWorkspace ? {
+    identity: `${initialWorkspace.user.userId}:${initialWorkspace.user.role}:${initialWorkspace.user.active}`,
+    data: initialOperations, error: initialOperationsError,
+  } : null);
+  const consumeInitialOverview = useCallback(() => setInitialOverview(null), []);
   const [section, setSection] = useState<Section>('dashboard');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -140,7 +165,7 @@ export default function CRMApp() {
   const workspaceRequest = useRef<Promise<void> | null>(null);
   const workspaceController = useRef<AbortController | null>(null);
   const workspaceSequence = useRef(0), mounted = useRef(false);
-  const initialOverviewRead = useRef(true);
+  const initialOverviewRead = useRef(!initialWorkspace);
 
   const load = useCallback((force = true): Promise<void> => {
     // The first overview mounts just after this same workspace was loaded.
@@ -169,14 +194,15 @@ export default function CRMApp() {
     return flight;
   }, []);
   useEffect(() => {
-    mounted.current = true; void load();
+    mounted.current = true;
+    if (!initialWorkspace && !initialError) void load();
     return () => { mounted.current = false; workspaceController.current?.abort(); workspaceRequest.current = null; };
-  }, [load]);
+  }, [initialWorkspace, initialError, load]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 5000); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => { const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); searchRef.current?.focus(); } }; document.addEventListener('keydown', key); return () => document.removeEventListener('keydown', key); }, []);
   const close = useCallback(() => { setModal(null); setModalError(''); }, []);
   const open = (next: ModalState) => { setModal(next); setModalError(''); };
-  const navigate = (next: Section, nextFilter = 'all') => { setSection(next); setFilter(nextFilter); setSearch(''); setMobileNav(false); };
+  const navigate = (next: Section, nextFilter = 'all') => { preloadSection(next); setSection(next); setFilter(nextFilter); setSearch(''); setMobileNav(false); };
 
   useEffect(() => {
     const back = (event: Event) => {
@@ -212,6 +238,13 @@ export default function CRMApp() {
     finally { setBusy(false); }
   };
 
+  const deferredSearch = useDeferredValue(search);
+  const searchText = deferredSearch.trim().toLowerCase();
+  const customerIndex = useMemo(() => new Map((data?.customers || []).map(customer => [customer.id, customer])), [data?.customers]);
+  const leadRecords = useMemo(() => (data?.leads || []).filter(lead =>
+    (filter === 'all' || lead.status === filter) && `${lead.title} ${lead.contact} ${lead.location} ${customerIndex.get(lead.customerId)?.name}`.toLowerCase().includes(searchText)
+  ), [data?.leads, filter, searchText, customerIndex]);
+
   if (loading) return <div className="boot-screen"><BrandMark /><h1>Opening your workspace</h1><p>Connecting to smart construction</p><LoaderCircle className="spin" size={23} /></div>;
   if (!data) return <div className="boot-screen"><BrandMark /><h1>Let’s reconnect.</h1><p>{loadError || 'Your workspace is not available yet.'}</p><button className="button button-primary" onClick={() => { setLoading(true); void load(); }}><RefreshCw size={17} />Try again</button><SignOutButton /></div>;
 
@@ -228,8 +261,6 @@ export default function CRMApp() {
   const customerById = data.customers.find(c => c.id === modal?.id);
   const followById = data.followups.find(f => f.id === modal?.id);
   const workById = data.workorders.find(w => w.id === modal?.id);
-  const searchText = search.trim().toLowerCase();
-  const leadRecords = data.leads.filter(l => (filter === 'all' || l.status === filter) && `${l.title} ${l.contact} ${l.location} ${data.customers.find(c => c.id === l.customerId)?.name}`.toLowerCase().includes(searchText));
   const currentLabel = NAV.find(n => n.key === section)?.label || 'Settings';
   const operationsSection = section === 'stock' || section === 'attendance' || section === 'expenses' || section === 'payments';
   const setLeadStatus = async (lead: Lead, status: LeadStatus) => {
@@ -251,13 +282,13 @@ export default function CRMApp() {
   return <>
     <div className={`crm-app${mobileNav ? ' nav-open' : ''}`}>
       {mobileNav && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
-      <aside className="sidebar"><button className="brand" onClick={() => navigate('dashboard')} aria-label="smart construction dashboard"><BrandMark /><span>smart<span className="brand-second">construction</span></span></button><div className="workspace-label"><span />YOUR WORKSPACE</div><nav aria-label="Main navigation">{NAV.filter(item => !item.adminOnly || owner).map(({ key, label, icon: Icon }) => <button key={key} className={`nav-item${section === key ? ' active' : ''}`} onClick={() => navigate(key)}><Icon size={20} strokeWidth={1.6} /><span>{label}</span>{key === 'followups' && overdue > 0 && <b className="nav-count">{overdue}</b>}</button>)}</nav><div className="sidebar-bottom"><button className={`nav-item${section === 'settings' ? ' active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={20} strokeWidth={1.6} /><span>Settings</span></button><button className="nav-item" onClick={() => open({ type: 'help' })}><HelpCircle size={20} strokeWidth={1.6} /><span>Quick guide</span></button><SignOutButton className="nav-item" /><div className="sidebar-workspace"><span className="online-dot" /><div><strong>Cloud workspace</strong><span>INR · GST enabled</span></div><ShieldCheck size={17} /></div></div></aside>
+      <aside className="sidebar"><button className="brand" onClick={() => navigate('dashboard')} aria-label="smart construction dashboard"><BrandMark /><span>smart<span className="brand-second">construction</span></span></button><div className="workspace-label"><span />YOUR WORKSPACE</div><nav aria-label="Main navigation">{NAV.filter(item => !item.adminOnly || owner).map(({ key, label, icon: Icon }) => <button key={key} className={`nav-item${section === key ? ' active' : ''}`} onMouseEnter={() => preloadSection(key)} onFocus={() => preloadSection(key)} onClick={() => navigate(key)}><Icon size={20} strokeWidth={1.6} /><span>{label}</span>{key === 'followups' && overdue > 0 && <b className="nav-count">{overdue}</b>}</button>)}</nav><div className="sidebar-bottom"><button className={`nav-item${section === 'settings' ? ' active' : ''}`} onMouseEnter={() => preloadSection('settings')} onFocus={() => preloadSection('settings')} onClick={() => navigate('settings')}><Settings2 size={20} strokeWidth={1.6} /><span>Settings</span></button><button className="nav-item" onClick={() => open({ type: 'help' })}><HelpCircle size={20} strokeWidth={1.6} /><span>Quick guide</span></button><SignOutButton className="nav-item" /><div className="sidebar-workspace"><span className="online-dot" /><div><strong>Cloud workspace</strong><span>INR · GST enabled</span></div><ShieldCheck size={17} /></div></div></aside>
       <div className="workspace-shell"><header className="topbar"><div className="topbar-left"><IconButton label="Open navigation" className="mobile-menu" onClick={() => setMobileNav(true)}><Menu size={23} /></IconButton><div className="breadcrumb">Workspace <ChevronRight size={14} /><strong>{currentLabel}</strong></div></div><label className="global-search"><Search size={18} /><input ref={searchRef} aria-label="Search workspace" placeholder="Search your workspace…" value={search} onChange={e => setSearch(e.target.value)} /><kbd>⌘ K</kbd>{search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X size={16} /></button>}</label><div className="topbar-right"><IconButton label={`${overdue} overdue follow-ups`} onClick={() => navigate('followups', 'overdue')} className="notification-button"><Bell size={20} />{overdue > 0 && <span className="notification-dot" />}</IconButton><span className="topbar-divider" /><button className="profile-button" onClick={() => navigate('settings')}><Avatar name={data.user.name} /><span><strong>{data.user.name}</strong><small>{ROLE_LABELS[data.user.role]}</small></span><ChevronDown size={14} /></button></div></header>
       <main className="workspace-main" id="main">
         {loadError && <div className="inline-alert"><CircleAlert size={17} />{loadError}<button onClick={() => void load()}>Retry</button></div>}
         {!modal && modalError && <div role="alert" className="inline-alert error"><CircleAlert size={17} />{modalError}<button onClick={() => setModalError('')} aria-label="Dismiss error"><X size={16} /></button></div>}
         {hasDemo && <div className="demo-banner"><span><Sparkles size={15} /><strong>Example workspace</strong><span>Sample records are marked and kept separate from your work.</span></span>{owner && <button disabled={busy} onClick={() => open({ type: 'clear_demo' })}>Clear examples <X size={14} /></button>}</div>}
-        {section === 'dashboard' && !searchText ? <Dashboard data={data} permissions={permissions} navigate={navigate} open={open} busy={busy} refreshWorkspace={load} /> : <>
+        {section === 'dashboard' && !searchText ? <Dashboard data={data} permissions={permissions} navigate={navigate} open={open} busy={busy} refreshWorkspace={load} initialOverview={initialOverview} onInitialOverviewUsed={consumeInitialOverview} /> : <>
           <div className="page-heading"><div><span className="eyebrow">{section === 'settings' ? 'YOUR WORKSPACE' : section === 'dashboard' ? 'FIND YOUR WORK' : 'WORKSPACE'}</span><h1>{section === 'dashboard' ? 'Search results' : currentLabel}</h1><p>{({ leads: 'Every conversation. Every opportunity. A clear next step.', followups: 'Stay close to your customers and ahead of the next action.', quotations: 'Thoughtful proposals, precise pricing and clear approvals.', workorders: 'From a signed agreement to a job well done.', customers: 'The people and businesses you build for.', stock: 'Keep materials accounted for, from delivery to the job site.', attendance: owner ? 'A clear record of your team’s working days.' : 'Check in, check out and keep track of your working days.', expenses: owner ? 'Review submissions, approve expenses and see the complete picture.' : 'Record your expenses and follow their approval status.', payments: 'Track customer payments, due stages and outstanding work-order balances.', settings: 'Your company, your team and the way you work.', team_activity: 'See who changed what, when it happened and the details behind it.', dashboard: `Results for “${search}”` })[section]}</p></div><div className="heading-actions">{section !== 'settings' && section !== 'dashboard' && section !== 'team_activity' && !operationsSection && <button className="button button-secondary" onClick={exportList}><Download size={16} /><span>Export</span></button>}{section === 'leads' && commercial && <button className="button button-primary" onClick={() => open({ type: 'lead' })}><Plus size={17} />Add lead</button>}{section === 'customers' && commercial && <button className="button button-primary" onClick={() => open({ type: 'customer' })}><Plus size={17} />Add customer</button>}{section === 'followups' && follow && <button className="button button-primary" onClick={() => open({ type: 'followup' })}><Plus size={17} />Schedule follow-up</button>}{section === 'quotations' && commercial && <button className="button button-primary" onClick={() => open({ type: 'quote' })}><Plus size={17} />New quotation</button>}</div></div>
           {section === 'dashboard' && <SearchResults data={data} search={searchText} open={open} />}
           {section === 'leads' && <><div className="list-toolbar"><div className="tabs"><button className={filter === 'all' ? 'selected' : ''} onClick={() => setFilter('all')}>All leads <span>{data.leads.length}</span></button><button className={filter === 'NEW' ? 'selected' : ''} onClick={() => setFilter('NEW')}>New</button><button className={filter === 'WON' ? 'selected' : ''} onClick={() => setFilter('WON')}>Won</button><button className={filter === 'LOST' ? 'selected' : ''} onClick={() => setFilter('LOST')}>Lost</button></div><div className="view-toggle"><IconButton label="Board view" className={leadView === 'board' ? 'selected' : ''} onClick={() => setLeadView('board')}><LayoutGrid size={17} /></IconButton><IconButton label="List view" className={leadView === 'list' ? 'selected' : ''} onClick={() => setLeadView('list')}><List size={18} /></IconButton></div></div>{leadRecords.length ? leadView === 'board' && filter !== 'WON' && filter !== 'LOST' ? <LeadBoard data={data} leads={leadRecords} open={open} commercial={commercial} dashboard={false} /> : <LeadTable data={data} leads={leadRecords} open={open} /> : <div className="panel"><Empty icon={UsersRound} title="Your next project starts here" detail="Add an enquiry and keep its owner, site details and follow-ups together." action={commercial && <button className="button button-primary" onClick={() => open({ type: 'lead' })}><Plus size={17} />Add a lead</button>} /></div>}</>}
@@ -300,7 +331,7 @@ function StatusTabs({ choices, filter, setFilter }: { choices: string[][]; filte
 
 type PermissionFlags = { commercial: boolean; approve: boolean; delivery: boolean; follow: boolean; owner: boolean };
 type OpenModal = (modal: ModalState) => void;
-function Dashboard({ data, permissions: p, navigate, open, busy, refreshWorkspace }: { data: WorkspaceData; permissions: PermissionFlags; navigate: (s: Section, filter?: string) => void; open: OpenModal; busy: boolean; refreshWorkspace: (force?: boolean) => Promise<void> }) {
+function Dashboard({ data, permissions: p, navigate, open, busy, refreshWorkspace, initialOverview, onInitialOverviewUsed }: { data: WorkspaceData; permissions: PermissionFlags; navigate: (s: Section, filter?: string) => void; open: OpenModal; busy: boolean; refreshWorkspace: (force?: boolean) => Promise<void>; initialOverview: OverviewBootstrap | null; onInitialOverviewUsed: () => void }) {
   const pipeline = data.leads.filter(l => !['WON', 'LOST'].includes(l.status));
   const next = data.followups.filter(f => f.status === 'OPEN').sort((a, b) => a.dueAt.localeCompare(b.dueAt)).slice(0, 4);
   const pending = data.quotations.filter(q => effectiveQuoteStatus(q) === 'ISSUED');
@@ -308,7 +339,7 @@ function Dashboard({ data, permissions: p, navigate, open, busy, refreshWorkspac
   const empty = !data.leads.length && !data.customers.length && !data.quotations.length && !data.workorders.length;
   const configured = !!(data.company.legalName && data.company.gstin && data.company.stateCode && data.company.address);
   return <><div className="page-heading dashboard-heading"><div><span className="date-eyebrow"><CalendarDays size={14} />{new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span><h1>Workspace overview<span className="heading-dot">.</span></h1><p>Welcome back, {data.user.name.split(' ')[0]}. Your projects, people and daily operations in one place.</p></div>{p.commercial && <button className="button button-primary" onClick={() => open({ type: 'lead' })}><Plus size={18} />Add new lead</button>}</div>
-    <DashboardOverview workspace={data} navigate={navigate} refreshWorkspace={refreshWorkspace} />
+    <DashboardOverview workspace={data} navigate={navigate} refreshWorkspace={refreshWorkspace} initialOverview={initialOverview} onInitialOverviewUsed={onInitialOverviewUsed} />
     {empty ? <><section className="welcome-panel"><div className="welcome-copy"><span className="welcome-label"><span />START YOUR NEXT PROJECT</span><h2>Build relationships.<br />Deliver great work.</h2><p>Add a customer and lead, then follow the project through quotation and delivery. Your daily operations are available in the overview above.</p><div className="welcome-actions">{p.commercial && <button className="button button-primary" onClick={() => open({ type: 'customer' })}><Plus size={18} />Add your first customer</button>}{p.owner && <button className="button button-light" disabled={busy} onClick={() => open({ type: 'load_demo' })}><Sparkles size={17} />Explore example workspace</button>}</div><span className="welcome-note"><ShieldCheck size={14} />Private access · Cloud saved · Ready for your team</span></div><div className="welcome-illustration" aria-hidden="true"><div className="blueprint-grid" /><div className="building building-back"><i /><i /><i /><i /><i /><i /></div><div className="building building-front"><i /><i /><i /><i /><i /><i /><i /><i /><i /></div><div className="illustration-chip"><CheckCircle2 size={17} />A stronger foundation</div></div></section><div className="setup-steps"><button onClick={() => navigate('settings')}><span className={`step-number${configured ? ' complete' : ''}`}>{configured ? <Check size={18} /> : '01'}</span><div><h3>Set up your company</h3><p>Add your GST registration and company details.</p></div><ArrowUpRight size={20} /></button><button onClick={() => p.commercial && open({ type: 'customer' })} disabled={!p.commercial}><span className="step-number">02</span><div><h3>Add your first customer</h3><p>Start with the people you’re building for.</p></div><ArrowUpRight size={20} /></button><button onClick={() => p.commercial && open({ type: 'lead' })} disabled={!p.commercial}><span className="step-number">03</span><div><h3>Create an opportunity</h3><p>Capture the project and its next action.</p></div><ArrowUpRight size={20} /></button></div></> : <>
 
     <section className="panel pipeline-panel"><PanelHeader title="Lead pipeline" eyebrow="FROM FIRST HELLO TO HANDSHAKE"><button className="text-link" onClick={() => navigate('leads')}>View all leads <ArrowUpRight size={16} /></button></PanelHeader><LeadBoard data={data} leads={pipeline} open={open} commercial={p.commercial} dashboard /></section>

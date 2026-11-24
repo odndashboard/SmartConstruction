@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
-  MAX_PAISE, computeQuote, financialYear, getTaxMode, parseMoney,
+  MAX_PAISE, computeQuote, financialYear, formatINR, getTaxMode, parseMoney,
   todayIST, validateRegistration,
 } from '../lib/finance.ts';
 import type { QuoteItemInput } from '../lib/types.ts';
@@ -175,6 +175,17 @@ describe('configuration and financial input boundaries', () => {
 });
 
 describe('registration and India calendar boundaries', () => {
+  test('currency labels retain paise precision, Indian grouping and compact thresholds', () => {
+    assert.equal(formatINR(0), '₹0');
+    assert.equal(formatINR(1), '₹0.01');
+    assert.equal(formatINR(12345678), '₹1,23,456.78');
+    assert.equal(formatINR(-123456), '-₹1,234.56');
+    assert.equal(formatINR(9999900, true), '₹99,999');
+    assert.equal(formatINR(10000000, true), '₹1L');
+    assert.equal(formatINR(125000000, true), '₹12.5L');
+    assert.equal(formatINR(1000000000, true), '₹1Cr');
+  });
+
   test('synthetic GSTIN passes only format and matching-state checks', () => {
     // Synthetic fixture; no claim of actual registration or checksum validity.
     assert.doesNotThrow(() => validateRegistration('06ABCDE1234F1Z5', '06', true));

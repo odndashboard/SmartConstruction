@@ -30,7 +30,10 @@ export async function proxy(request: NextRequest) {
       },
     },
   });
-  await client.auth.getUser();
+  // Renew the session with verified claims (usually local signature validation).
+  // Claims never authorize CRM data: protected pages and APIs still obtain a
+  // fresh Auth user and the database checks current membership and permissions.
+  await client.auth.getClaims();
   // Return the same response carrying all refreshed cookies. Each protected
   // handler separately verifies the user and active database membership.
   return response;

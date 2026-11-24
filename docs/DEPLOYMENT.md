@@ -12,7 +12,9 @@ Use the **Next.js** framework preset, the repository root, install command `npm 
 
 The production Supabase project is in Sydney (`ap-southeast-2`), so `vercel.json` places the server functions in Sydney (`syd1`). Keep authenticated application functions close to the database; the public static assets continue using Vercel's delivery network. If the database region changes, review this setting before redeploying. See [Vercel's region guidance](https://vercel.com/docs/functions/configuring-functions/region).
 
-API Route Handlers validate the user with Supabase Auth, persist refreshed cookies, and verify active membership and permissions in the database. The page proxy refreshes cookies for Server Components; API requests do not pass through that extra Auth request. Keep API authentication in each handler and retain private/no-store response headers when adding endpoints.
+API Route Handlers validate the user with Supabase Auth, persist refreshed cookies, and verify active membership and permissions in the database. The page proxy uses `getClaims()` to renew the session for Server Components; it does not authorize data access. Page bootstrap and API handlers still perform fresh `getUser()` verification and live database membership checks. API requests do not pass through that extra proxy Auth request. Keep API authentication in each handler and retain private/no-store response headers when adding endpoints.
+
+Page bootstrap starts workspace and operations RPCs together for the same verified actor. Workspace reads have a ten-second deadline; optional operations reads have five seconds. These budgets begin after authentication and are not total page-load guarantees. Missing operations data produces a retry state, while identity or permission conflicts reject the entire bootstrap. Neither user identities nor private database responses are cached across requests.
 
 ## 2. Prepare the intended Supabase project
 

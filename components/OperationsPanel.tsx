@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
 import {
   Archive, ArrowDownLeft, ArrowUpRight, CalendarDays, Check, CheckCircle2, ChevronDown,
   CircleAlert, Clock3, Download, IndianRupee, LoaderCircle, LogIn, LogOut, MapPin,
@@ -10,10 +11,6 @@ import type { Member, WorkspaceData } from '@/lib/types';
 import { todayIST } from '@/lib/finance';
 import { saveTextFile } from '@/lib/native-platform';
 import { readJson } from '@/lib/client-read';
-import AttendanceAdvanced from './AttendanceAdvanced';
-import StockAdvanced from './StockAdvanced';
-import PaymentsPanel from './PaymentsPanel';
-import ExpenseReceipts from './ExpenseReceipts';
 import type { ExpenseReceipt } from '@/lib/operations-extensions';
 import {
   EXPENSE_CATEGORIES, type AttendanceRecord, type AttendanceStatus, type Expense,
@@ -21,6 +18,14 @@ import {
   type OperationsMutation, type OperationsSection, type StockItem, type StockMovementType,
 } from '@/lib/operations-types';
 import styles from './OperationsPanel.module.css';
+
+function SectionLoading() {
+  return <div className="empty-state" role="status"><LoaderCircle size={22} className="spin" /><p>Opening this section…</p></div>;
+}
+const AttendanceAdvanced = dynamic(() => import('./AttendanceAdvanced'), { loading: SectionLoading });
+const StockAdvanced = dynamic(() => import('./StockAdvanced'), { loading: SectionLoading });
+const PaymentsPanel = dynamic(() => import('./PaymentsPanel'), { loading: SectionLoading });
+const ExpenseReceipts = dynamic(() => import('./ExpenseReceipts'), { loading: () => <p className="muted" role="status">Loading receipt controls…</p> });
 
 type Props = { section: OperationsSection; workspace: WorkspaceData; search: string };
 type Editor =
@@ -152,6 +157,14 @@ function OperationsWorkspace({ section, workspace, search }: Props) {
     });
   }, [month]);
 
+  useEffect(() => {
+    // Load only this section's code while its authenticated data request runs.
+    // This imports static UI code; it does not cache or prefetch private records.
+    const code = section === 'stock' ? import('./StockAdvanced')
+      : section === 'attendance' ? import('./AttendanceAdvanced')
+        : section === 'payments' ? import('./PaymentsPanel') : import('./ExpenseReceipts');
+    void code.catch(() => undefined);
+  }, [section]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   function reload() { setLoading(true); setError(''); void refresh(); }

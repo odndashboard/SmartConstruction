@@ -19,6 +19,9 @@ const STATE_CODES = new Set(STATE_OPTIONS.map(state=>state.value));
 const UTGST = new Set(['04','26','31','35','38']);
 export const MAX_PAISE = 9_000_000_000_000;
 const MAX = BigInt(MAX_PAISE);
+// Locale settings are reusable; no dates, amounts or private records are cached.
+const INDIA_DATE_FORMAT = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'});
+const INR_FORMAT = new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',minimumFractionDigits:0,maximumFractionDigits:2});
 
 function scaled(value: string, places: number, label: string): bigint {
   if (typeof value !== 'string' || value.length > 30) throw new Error(`${label} must be a decimal value.`);
@@ -39,7 +42,7 @@ export function parseMoney(value: string): number { return bounded(scaled(value,
 
 export function todayIST(date: Date = new Date()): string {
   if (Number.isNaN(date.getTime())) throw new Error('Invalid date.');
-  const parts = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);
+  const parts = INDIA_DATE_FORMAT.formatToParts(date);
   const get = (type:string)=>parts.find(p=>p.type===type)!.value;
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
@@ -98,5 +101,5 @@ export function formatINR(paise: number, compact=false): string {
   const rupees=paise/100;
   if(compact && Math.abs(rupees)>=10000000) return `₹${(rupees/10000000).toFixed(2).replace(/\.00$/,'')}Cr`;
   if(compact && Math.abs(rupees)>=100000) return `₹${(rupees/100000).toFixed(1).replace(/\.0$/,'')}L`;
-  return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',minimumFractionDigits:0,maximumFractionDigits:2}).format(rupees);
+  return INR_FORMAT.format(rupees);
 }

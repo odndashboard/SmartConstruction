@@ -14,10 +14,13 @@ import styles from './DashboardOverview.module.css';
 
 type Destination = 'leads' | 'followups' | 'quotations' | 'workorders' | 'customers' | 'stock'
   | 'attendance' | 'expenses' | 'payments' | 'team_activity' | 'settings';
+export type OverviewBootstrap = { identity: string; data: OperationsData | null; error: string };
 type Props = {
   workspace: WorkspaceData;
   navigate: (section: Destination, filter?: string) => void;
   refreshWorkspace: (force?: boolean) => Promise<void>;
+  initialOverview?: OverviewBootstrap | null;
+  onInitialOverviewUsed?: () => void;
 };
 type ReadState = { identity: string; data: OperationsData | null; loading: boolean; error: string };
 type CardProps = {
@@ -66,9 +69,12 @@ function Shortcut({ icon: Icon, title, detail, onClick }: { icon: typeof Package
   return <button type="button" className={styles.shortcut} onClick={onClick}><Icon size={17} strokeWidth={1.7} /><span><strong>{title}</strong><small>{detail}</small></span><ChevronRight size={15} /></button>;
 }
 
-export default function DashboardOverview({ workspace, navigate, refreshWorkspace }: Props) {
+export default function DashboardOverview({ workspace, navigate, refreshWorkspace, initialOverview = null, onInitialOverviewUsed }: Props) {
   const identity = `${workspace.user.userId}:${workspace.user.role}:${workspace.user.active}`;
-  const [read, setRead] = useState<ReadState>({ identity: '', data: null, loading: true, error: '' });
+  const bootstrap = useRef(initialOverview?.identity === identity ? initialOverview : null);
+  const [read, setRead] = useState<ReadState>(() => initialOverview?.identity === identity
+    ? { identity, data: initialOverview.data, loading: false, error: initialOverview.error }
+    : { identity: '', data: null, loading: true, error: '' });
   const sequence = useRef(0), request = useRef<AbortController | null>(null);
   const lastRead = useRef(0), mounted = useRef(false), pending = useRef(false);
   const refreshCore = useRef(refreshWorkspace);
@@ -116,8 +122,15 @@ export default function DashboardOverview({ workspace, navigate, refreshWorkspac
 
   useEffect(() => {
     mounted.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Start an authenticated asynchronous read for this identity.
-    void refresh(true, false);
+    onInitialOverviewUsed?.();
+    if (bootstrap.current?.identity === identity) {
+      // The server already supplied this exact member's fresh snapshot. The
+      // parent consumes it so returning to Dashboard always loads live records.
+      lastRead.current = Date.now();
+    } else {
+      bootstrap.current = null;
+      void refresh(true, false);
+    }
     const onReturn = () => {
       if (!pending.current && document.visibilityState === 'visible' && Date.now() - lastRead.current >= 30_000) void refresh(true);
     };
@@ -128,7 +141,7 @@ export default function DashboardOverview({ workspace, navigate, refreshWorkspac
       window.removeEventListener('focus', onReturn);
       document.removeEventListener('visibilitychange', onReturn);
     };
-  }, [refresh]);
+  }, [identity, onInitialOverviewUsed, refresh]);
 
   const current = read.identity === identity ? read.data : null;
   const loading = read.identity !== identity || read.loading;

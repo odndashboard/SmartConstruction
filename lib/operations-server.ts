@@ -14,8 +14,10 @@ interface OperationsExport {
   extension: OperationsExtension;
 }
 
-export async function operationsRpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
-  const { data, error } = await createAdminClient().rpc(name, args);
+export async function operationsRpc<T>(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const request = createAdminClient().rpc(name, args);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (signal?.aborted) throw new CRMError('This module is taking too long to respond. Please try again.', 503);
   if (error) {
     const code = error.code ?? '';
     if (/^PT(400|401|403|404|409|503)$/.test(code)) throw new CRMError(error.message || 'This operation was not permitted.', Number(code.slice(2)));

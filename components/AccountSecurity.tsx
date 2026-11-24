@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from 'react';
 import { CheckCircle2, CircleAlert, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react';
 import { changePasswordSchema } from '@/lib/password-policy';
-import { SignOutButton } from './AuthForms';
+import { SignOutButton } from './SignOutButton';
 import styles from './AccountSecurity.module.css';
 
 export default function AccountSecurity({ email, owner }: { email: string; owner: boolean }) {
