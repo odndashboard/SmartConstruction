@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { Member, WorkspaceData } from '@/lib/types';
 import { todayIST } from '@/lib/finance';
+import { readJson } from '@/lib/client-read';
 import { TEAM_ACTIVITY_MODULES, type TeamActivityData, type TeamActivityEntry, type TeamActivityModule } from '@/lib/operations-types';
 import styles from './TeamActivityPanel.module.css';
 
@@ -157,14 +158,12 @@ function AdministratorActivity({ workspace, search }: Props) {
     const requestSequence = ++sequence.current;
     const params = new URLSearchParams({ month: query.month, module: query.module, page: String(query.page) });
     if (query.employeeId) params.set('employeeId', query.employeeId);
-    return fetch(`/api/team-activity?${params}`, { cache: 'no-store', credentials: 'same-origin', signal: request.signal }).then(async response => {
+    return readJson<TeamActivityData & { error?: string }>(`/api/team-activity?${params}`, { signal: request.signal }).then(({ response, body }) => {
       if (!mounted.current || requestSequence !== sequence.current) return;
       if (response.status === 401 || response.status === 403) {
         setResult(null); setExpanded(null); setForbidden(true);
         throw new Error(response.status === 401 ? 'Your session has ended. Sign in again to review team activity.' : 'Your account no longer has access to team activity.');
       }
-      const body = await response.json() as TeamActivityData & { error?: string };
-      if (!mounted.current || requestSequence !== sequence.current) return;
       if (!response.ok) throw new Error(body.error || 'Team activity could not be loaded. Please try again.');
       setForbidden(false); setResult({ key: JSON.stringify(query), data: body });
     }).catch((cause: unknown) => {

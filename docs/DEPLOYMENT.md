@@ -2,41 +2,33 @@
 
 Only the administrator needs provider accounts. Employees receive the final CRM URL and their own private activation link.
 
-## 1. Use the intended Vercel project
+## 1. Connect the GitHub repository to Vercel
 
-Use [smart-construction-dashboard](https://vercel.com/dash-board10/smart-construction-dashboard) in **DashBoard (`dash-board10`)**. It is linked to `odndashboard/SmartConstruction` with production branch `main`. The assigned production origin is `https://smart-construction-dashboard.vercel.app`. See [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) for the verified deployment and remaining setup work.
+Open your intended Vercel team, choose **Add New → Project**, and import `odndashboard/SmartConstruction`.
 
-Leave the older `smart-construction-crm` project under `odnprints-6693s-projects` untouched. Use the existing Dashboard project for this installation.
+If it is missing from the list, use Vercel's GitHub access/installation control and grant the **Vercel GitHub App** access to this repository under `odndashboard`. Granting the ChatGPT GitHub App access is a separate permission and does not grant Vercel access.
 
-For future Git relinking, use **Settings → Git**. Vercel's GitHub App must have access to the repository under `odndashboard`; access granted to the ChatGPT GitHub App is a separate permission.
+Use the **Next.js** framework preset, the repository root, install command `npm ci`, and build command `npm run build`. Do not select static export or a `dist` output directory. Record the stable production domain Vercel assigns to the project.
 
-Use the **Next.js** framework preset, **Node 24.x**, the repository root, install command `npm ci`, and build command `npm run build`. Keep the default Next.js output.
+The production Supabase project is in Sydney (`ap-southeast-2`), so `vercel.json` places the server functions in Sydney (`syd1`). Keep authenticated application functions close to the database; the public static assets continue using Vercel's delivery network. If the database region changes, review this setting before redeploying. See [Vercel's region guidance](https://vercel.com/docs/functions/configuring-functions/region).
 
-## 2. Verify the intended Supabase project and configure Auth
+API Route Handlers validate the user with Supabase Auth, persist refreshed cookies, and verify active membership and permissions in the database. The page proxy refreshes cookies for Server Components; API requests do not pass through that extra Auth request. Keep API authentication in each handler and retain private/no-store response headers when adding endpoints.
 
-The selected database is **ODN → Smart Construction dashboard**, project [`ynyepmlpwpndpxwzqtcb`](https://supabase.com/dashboard/project/ynyepmlpwpndpxwzqtcb).
+## 2. Prepare the intended Supabase project
 
-The SQL in `supabase/migrations/202611230001_crm.sql` has already been applied, recorded remotely as migration name `crm`, version `20261123115055`. **Do not run the initialization file again.** It is not idempotent. Retain the repository-to-remote version mapping in [DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md) when comparing future migration history.
+Open the Supabase project you want to use for the CRM. Use a new/dedicated database if the current project belongs to another application.
 
-For a separate installation, inspect the existing `crm` schema, CRM functions, and migration history first. Apply the entire initialization file once only when that CRM has not been initialized. Verify existing objects instead of dropping or recreating them.
+In the project's SQL Editor, open and run the entire file in `supabase/migrations/` ending in `_crm.sql`. The migration is one transaction. It creates the private `crm` schema and restricted public RPC functions; it does not seed sample customers or public access policies.
 
-The Supabase Data API must be enabled with `public` exposed so the server can call the restricted RPC functions. **Keep `crm` unexposed** and do not grant direct table access to `anon`, `authenticated`, or `service_role`. The existing RPC grants are deliberate.
+The Supabase Data API must be enabled with `public` exposed so the server can call those RPC functions. **Do not expose the `crm` schema** and do not grant anon/authenticated access to its tables or RPCs.
 
-In Authentication settings:
+In Authentication settings, keep email/password sign-in enabled and disable public signups. Set a minimum password length of at least 12 characters. Configure the Site URL to the stable CRM origin and add the exact `/auth/confirm` URL to the allowed redirect list. If using a staging deployment, configure its exact origin separately.
 
-- Keep email/password sign-in enabled.
-- Disable public registration and anonymous sign-in.
-- Require passwords of at least 12 characters.
-- Set the Site URL to `https://smart-construction-dashboard.vercel.app`.
-- Allow the exact redirect `https://smart-construction-dashboard.vercel.app/auth/confirm`.
-
-Configure a separate staging installation's origin and database independently.
-
-The app generates manual invitation/recovery links. This version does not automatically email employee invitations; share each private link directly with its intended recipient.
+The app creates manual invitation/recovery links; Supabase's default email service is not a production employee mail service. Do not promise that an invitation was emailed when using this version.
 
 ## 3. Set Vercel environment variables
 
-Open the intended project's [Vercel environment settings](https://vercel.com/dash-board10/smart-construction-dashboard/settings/environment-variables). All four Production variables below are configured, and a redeployment has verified that the login form is available. Keep the server key as a Production Secret when maintaining these settings:
+In Vercel **Project → Settings → Environment Variables**, add:
 
 | Key | Where its value comes from |
 |---|---|
@@ -50,8 +42,6 @@ Use Production scope for the live database. Use a separate staging Supabase proj
 Enter the secret directly into Vercel; do not put it in GitHub or send it through chat. Redeploy after changing environment variables because the public configuration is embedded at build time.
 
 ## 4. Create and designate your Owner account
-
-**This installation now has its designated, confirmed Owner. Production password login and Owner access have been verified. Do not rerun initialization.** The account-creation instructions below apply to a separately initialized installation or to an operator's documented recovery procedure.
 
 In Supabase **Authentication → Users**, use **Add user / Create user** to create your own account with your real email and a password that you choose privately. Use the dashboard's confirmation option for this administrator-created account. Copy its exact user UUID.
 
@@ -70,8 +60,6 @@ The function refuses to bootstrap if any CRM membership already exists. It does 
 Open the CRM domain and sign in with your own email/password. Confirm your role is **Owner**, then complete the company details in Settings. This establishes the administrator before admitting employees.
 
 If a terminal is available, `npm run owner:setup -- --email ... --name ...` provides a private activation-link alternative to the dashboard account creation step.
-
-An explicitly authorized password setup can use `scripts/setup-password-owner.mjs --execute --operator-only` inside a dedicated, non-serving Vercel Production administration build. This separate script requires an expiring `CRM_OWNER_SETUP_JSON` Production Secret and binds the operation to the expected project and exact source commit. It refuses an existing Owner or matching Auth account and never sends mail. Its deliberate success exit code is 78, so verify the success marker and database identity rather than interpreting the deployment's ERROR state as provisioning failure. Clear the temporary input and return to ordinary `main` source after execution. Do not put the command in normal build/install hooks or expose it through an HTTP route; do not automatically retry after a partial account creation.
 
 ## 5. Add your employees
 

@@ -36,4 +36,7 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
-export const config = { matcher: ['/', '/login', '/set-password', '/auth/:path*', '/api/:path*'] };
+// Route Handlers refresh cookies and verify the current user themselves. Running
+// this proxy for APIs would add a second serial Auth request to every refresh.
+// Pages keep the proxy because Server Components cannot persist renewed cookies.
+export const config = { matcher: ['/', '/login', '/set-password', '/auth/:path*'] };

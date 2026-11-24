@@ -10,6 +10,8 @@ The overview uses the existing authenticated operations endpoint and retains its
 
 Use **Refresh overview** to request the latest workspace and operations records. Returning to the Dashboard reloads its operations view. These screens are delivered by the live website, including inside the existing Android app; an app reinstall is not needed for this overview update.
 
+Dashboard, Team activity and operations reads have a 15-second deadline, including downloading and decoding the response. A slow or interrupted connection ends with a retry message instead of leaving Refresh disabled indefinitely. Repeated workspace reads share a pending request, and the Dashboard reuses the workspace read that just opened the app. An explicit refresh still asks for the latest records; no private data is placed in shared browser or CDN caches, and timed-out writes are never retried automatically.
+
 ## Access rules
 
 | Action | Owner/admin | Manager, Sales, Operations | Viewer |

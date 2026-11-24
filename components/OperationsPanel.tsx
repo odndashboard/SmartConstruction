@@ -9,6 +9,7 @@ import {
 import type { Member, WorkspaceData } from '@/lib/types';
 import { todayIST } from '@/lib/finance';
 import { saveTextFile } from '@/lib/native-platform';
+import { readJson } from '@/lib/client-read';
 import AttendanceAdvanced from './AttendanceAdvanced';
 import StockAdvanced from './StockAdvanced';
 import PaymentsPanel from './PaymentsPanel';
@@ -135,12 +136,11 @@ function OperationsWorkspace({ section, workspace, search }: Props) {
     const controller = new AbortController();
     readController.current = controller;
     const sequence = ++readSequence.current;
-    return fetch(`/api/operations?month=${encodeURIComponent(month)}`, { credentials: 'same-origin', cache: 'no-store', signal: controller.signal }).then(async response => {
-      const result = await response.json() as OperationsData & { error?: string };
+    return readJson<OperationsData & { error?: string }>(`/api/operations?month=${encodeURIComponent(month)}`, { signal: controller.signal }).then(({ response, body: result }) => {
       if (!mounted.current || sequence !== readSequence.current) return;
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) { setData(null); setEditor(null); }
-        throw new Error(result.error || 'This workspace could not be loaded. Please try again.');
+        throw new Error(response.status === 401 ? 'Your session has ended. Sign in again to view your records.' : response.status === 403 ? 'Your account no longer has access to these records.' : result.error || 'This workspace could not be loaded. Please try again.');
       }
       setData(result);
     }).catch((cause: unknown) => {

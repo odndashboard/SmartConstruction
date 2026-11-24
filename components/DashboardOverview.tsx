@@ -9,6 +9,7 @@ import {
 import type { WorkspaceData } from '@/lib/types';
 import type { OperationsData } from '@/lib/operations-types';
 import { buildDashboardOverview } from '@/lib/dashboard-overview';
+import { readJson, ReadTimeoutError } from '@/lib/client-read';
 import styles from './DashboardOverview.module.css';
 
 type Destination = 'leads' | 'followups' | 'quotations' | 'workorders' | 'customers' | 'stock'
@@ -16,7 +17,7 @@ type Destination = 'leads' | 'followups' | 'quotations' | 'workorders' | 'custom
 type Props = {
   workspace: WorkspaceData;
   navigate: (section: Destination, filter?: string) => void;
-  refreshWorkspace: () => Promise<void>;
+  refreshWorkspace: (force?: boolean) => Promise<void>;
 };
 type ReadState = { identity: string; data: OperationsData | null; loading: boolean; error: string };
 type CardProps = {
@@ -73,45 +74,50 @@ export default function DashboardOverview({ workspace, navigate, refreshWorkspac
   const refreshCore = useRef(refreshWorkspace);
   useEffect(() => { refreshCore.current = refreshWorkspace; }, [refreshWorkspace]);
 
-  const refresh = useCallback(async (includeWorkspace: boolean) => {
+  const refresh = useCallback(async (includeWorkspace: boolean, forceWorkspace = true) => {
     const next = ++sequence.current;
     request.current?.abort();
     const controller = new AbortController(); request.current = controller;
     pending.current = true;
     setRead(current => ({ identity, data: current.identity === identity ? current.data : null, loading: true, error: '' }));
     // The workspace reports its own load errors; this timestamp applies only to operations.
-    const coreRead = includeWorkspace ? refreshCore.current().catch(() => undefined) : Promise.resolve();
+    let coreRead = includeWorkspace ? refreshCore.current(forceWorkspace).catch(() => undefined) : Promise.resolve();
     try {
-      const response = await fetch('/api/operations', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
-      const body = await response.json() as OperationsData & { error?: string };
+      const { response, body } = await readJson<OperationsData & { error?: string }>('/api/operations', { signal: controller.signal });
       if (!mounted.current || next !== sequence.current) return;
       if (!response.ok) {
-        setRead({ identity, data: null, loading: false, error: response.status === 401 ? 'Please sign in again to view your overview.' : body.error || 'The operations overview could not be loaded. Please try again.' });
-        if (response.status === 401 || response.status === 403) void refreshCore.current().catch(() => undefined);
+        setRead({ identity, data: null, loading: true, error: response.status === 401 ? 'Please sign in again to view your overview.' : body.error || 'The operations overview could not be loaded. Please try again.' });
+        if (response.status === 401 || response.status === 403) coreRead = refreshCore.current().catch(() => undefined);
         return;
       }
       if (!body.extension || body.user?.userId !== workspace.user.userId || !body.user.active) {
-        setRead({ identity, data: null, loading: false, error: 'Your account details changed. Refresh the workspace to continue.' });
-        void refreshCore.current().catch(() => undefined);
+        setRead({ identity, data: null, loading: true, error: 'Your account details changed. Refresh the workspace to continue.' });
+        coreRead = refreshCore.current().catch(() => undefined);
         return;
       }
       if (body.user.role !== workspace.user.role) {
-        setRead({ identity, data: null, loading: false, error: 'Your permissions changed. Refreshing your workspace…' });
-        void refreshCore.current().catch(() => undefined);
+        setRead({ identity, data: null, loading: true, error: 'Your permissions changed. Refreshing your workspace…' });
+        coreRead = refreshCore.current().catch(() => undefined);
         return;
       }
       lastRead.current = Date.now();
-      setRead({ identity, data: body, loading: false, error: '' });
+      setRead({ identity, data: body, loading: true, error: '' });
     } catch (cause) {
       if (controller.signal.aborted || !mounted.current || next !== sequence.current) return;
-      setRead({ identity, data: null, loading: false, error: cause instanceof SyntaxError ? 'The server returned an incomplete overview. Please refresh.' : 'The operations overview could not be loaded. Check your connection and try again.' });
-    } finally { if (next === sequence.current) pending.current = false; await coreRead; }
+      setRead({ identity, data: null, loading: true, error: cause instanceof ReadTimeoutError ? cause.message : cause instanceof SyntaxError ? 'The server returned an incomplete overview. Please refresh.' : 'The operations overview could not be loaded. Check your connection and try again.' });
+    } finally {
+      await coreRead;
+      if (mounted.current && next === sequence.current) {
+        pending.current = false;
+        setRead(current => current.identity === identity ? { ...current, loading: false } : current);
+      }
+    }
   }, [identity, workspace.user.userId, workspace.user.role]);
 
   useEffect(() => {
     mounted.current = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Start an authenticated asynchronous read for this identity.
-    void refresh(true);
+    void refresh(true, false);
     const onReturn = () => {
       if (!pending.current && document.visibilityState === 'visible' && Date.now() - lastRead.current >= 30_000) void refresh(true);
     };

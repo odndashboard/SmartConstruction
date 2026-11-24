@@ -18,6 +18,7 @@ import TeamActivityPanel from './TeamActivityPanel';
 import DashboardOverview from './DashboardOverview';
 import type { OperationsSection } from '@/lib/operations-types';
 import { saveTextFile, printDocument } from '@/lib/native-platform';
+import { readJson } from '@/lib/client-read';
 import { SignOutButton } from './AuthForms';
 
 type Section = 'dashboard' | 'leads' | 'followups' | 'quotations' | 'workorders' | 'customers' | 'settings' | 'team_activity' | OperationsSection;
@@ -136,22 +137,41 @@ export default function CRMApp() {
   // Reuse an unresolved submission's ID if the response is lost. The server
   // safely replays its receipt instead of creating a second business record.
   const pendingRequests = useRef(new Map<string, string>());
+  const workspaceRequest = useRef<Promise<void> | null>(null);
+  const workspaceController = useRef<AbortController | null>(null);
+  const workspaceSequence = useRef(0), mounted = useRef(false);
+  const initialOverviewRead = useRef(true);
 
-  const load = useCallback(async () => {
-    try {
-      const response = await fetch('/api/workspace', { credentials: 'same-origin', cache: 'no-store' });
-      const result = await response.json() as WorkspaceData & { data?: WorkspaceData; error?: string };
-      if (response.status === 401) { window.location.replace('/login'); return; }
-      if (!response.ok) { setData(null); throw new Error(result.error || 'Your workspace could not be loaded.'); }
-      setLoadError('');
-      const next = result.data || result;
-      // A dashboard refresh must not replace a newer successful edit.
-      setData(current => current && current.user.userId === next.user.userId && current.revision > next.revision ? current : next);
-    } catch (error) { setLoadError(error instanceof Error ? error.message : 'Unable to connect to your workspace.'); }
-    finally { setLoading(false); }
+  const load = useCallback((force = true): Promise<void> => {
+    // The first overview mounts just after this same workspace was loaded.
+    // Later visits and every explicit refresh still request fresh records.
+    if (!force && initialOverviewRead.current) { initialOverviewRead.current = false; return Promise.resolve(); }
+    if (workspaceRequest.current) return workspaceRequest.current;
+    const controller = new AbortController(); workspaceController.current = controller;
+    const sequence = ++workspaceSequence.current;
+    const flight = (async () => {
+      try {
+        const { response, body: result } = await readJson<WorkspaceData & { data?: WorkspaceData; error?: string }>('/api/workspace', { signal: controller.signal });
+        if (!mounted.current || sequence !== workspaceSequence.current) return;
+        if (response.status === 401) { setData(null); window.location.replace('/login'); return; }
+        if (!response.ok) { setData(null); throw new Error(response.status === 403 ? 'Your account no longer has access to this workspace. Please sign in again.' : result.error || 'Your workspace could not be loaded.'); }
+        setLoadError('');
+        const next = result.data || result;
+        // A dashboard refresh must not replace a newer successful edit.
+        setData(current => current && current.user.userId === next.user.userId && current.revision > next.revision ? current : next);
+      } catch (error) {
+        if (!controller.signal.aborted && mounted.current && sequence === workspaceSequence.current) setLoadError(error instanceof Error ? error.message : 'Unable to connect to your workspace.');
+      } finally {
+        if (sequence === workspaceSequence.current) { workspaceRequest.current = null; if (mounted.current) setLoading(false); }
+      }
+    })();
+    workspaceRequest.current = flight;
+    return flight;
   }, []);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- This starts an async API read; state updates occur only after the awaited response.
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    mounted.current = true; void load();
+    return () => { mounted.current = false; workspaceController.current?.abort(); workspaceRequest.current = null; };
+  }, [load]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 5000); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => { const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); searchRef.current?.focus(); } }; document.addEventListener('keydown', key); return () => document.removeEventListener('keydown', key); }, []);
   const close = useCallback(() => { setModal(null); setModalError(''); }, []);
@@ -280,7 +300,7 @@ function StatusTabs({ choices, filter, setFilter }: { choices: string[][]; filte
 
 type PermissionFlags = { commercial: boolean; approve: boolean; delivery: boolean; follow: boolean; owner: boolean };
 type OpenModal = (modal: ModalState) => void;
-function Dashboard({ data, permissions: p, navigate, open, busy, refreshWorkspace }: { data: WorkspaceData; permissions: PermissionFlags; navigate: (s: Section, filter?: string) => void; open: OpenModal; busy: boolean; refreshWorkspace: () => Promise<void> }) {
+function Dashboard({ data, permissions: p, navigate, open, busy, refreshWorkspace }: { data: WorkspaceData; permissions: PermissionFlags; navigate: (s: Section, filter?: string) => void; open: OpenModal; busy: boolean; refreshWorkspace: (force?: boolean) => Promise<void> }) {
   const pipeline = data.leads.filter(l => !['WON', 'LOST'].includes(l.status));
   const next = data.followups.filter(f => f.status === 'OPEN').sort((a, b) => a.dueAt.localeCompare(b.dueAt)).slice(0, 4);
   const pending = data.quotations.filter(q => effectiveQuoteStatus(q) === 'ISSUED');
