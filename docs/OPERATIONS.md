@@ -4,7 +4,7 @@ These modules extend the existing Smart Construction CRM. They share the same em
 
 ## Dashboard overview
 
-The Dashboard tab brings the sales pipeline and operations into one overview, including when there are no leads yet. Summary cards open the relevant module. It shows current leads, follow-ups, quotations, work orders and stock, today's attendance, and clearly labelled monthly expense/attendance information. Customers, sites and material requests remain reachable from the overview; the Owner also sees payment balances, purchase orders and Team activity access.
+The Dashboard tab brings the sales pipeline and operations into one overview, including when there are no leads yet. Summary cards open the relevant module. It shows current leads, follow-ups, quotations, work orders and stock, today's attendance, and clearly labelled monthly expense/attendance information. Sites and material requests remain reachable from the overview; the Owner also sees payment balances, purchase orders and Team activity access. Customer details are managed inside leads, without a separate Customers tab or overview shortcut.
 
 The overview uses the existing authenticated operations endpoint and retains its permissions. Employees receive only their own attendance, assignment and expenses; company expense totals, customer payments and administrator controls require the current Owner role. Missing or failed operational reads show an unavailable/loading state, not a zero balance. Monetary aggregates use exact integer paise, and stock quantities with different units are never added into a single total.
 

@@ -32,7 +32,7 @@ const item = z.object({
 const schemas: Record<string, z.ZodType<any>> = {
   customer_save: z.object({ id: id.optional(), name: required(), contact: blank(), phone: blank(40), email, address: blank(2000), stateCode: state, gstin: blank(15) }).strict(),
   lead_save: z.object({ id: id.optional(), customerId: id, title: required(), contact: blank(), phone: blank(40), email,
-    location: blank(), siteAddress: blank(2000), stateCode: state, value: text(30).default('0'), status: leadStatus.default('NEW'),
+    location: blank(), siteAddress: blank(2000), stateCode: state, value: text(30).default('0'), status: leadStatus.optional(),
     source: blank(100), owner, priority: z.enum(['High', 'Medium', 'Low']).default('Medium'), notes: blank(10000) }).strict(),
   lead_status: z.object({ id, status: leadStatus, lostReason: blank(3000) }).strict(),
   followup_save: z.object({ id: id.optional(), leadId: id, title: required(), dueAt: z.string().datetime({ offset: true }),
@@ -61,7 +61,7 @@ const APPROVE: Role[] = ['OWNER', 'MANAGER'];
 const DELIVERY: Role[] = ['OWNER', 'MANAGER', 'OPERATIONS'];
 const FOLLOW: Role[] = ['OWNER', 'MANAGER', 'SALES', 'OPERATIONS'];
 const permission: Record<string, Role[]> = {
-  customer_save: SALES, lead_save: SALES, lead_status: SALES,
+  customer_save: SALES, lead_save: SALES, lead_status: APPROVE,
   followup_save: FOLLOW, followup_complete: FOLLOW, followup_cancel: FOLLOW,
   quote_save: SALES, quote_revise: SALES,
   quote_issue: APPROVE, quote_accept: APPROVE, quote_decline: APPROVE, quote_convert: APPROVE,
@@ -141,14 +141,18 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
     case 'lead_save': {
       const customer = get(data.customers, p.customerId, 'Customer');
       const existing = p.id ? get(data.leads, p.id, 'Lead') : undefined;
+      const status: LeadStatus = p.status ?? existing?.status ?? 'NEW';
+      if (status !== (existing?.status ?? 'NEW') && !APPROVE.includes(data.user.role)) {
+        throw new CRMError('Only an Admin or Manager can change a lead status.', 403);
+      }
       checkOwner(data, p.owner);
-      checkLeadTransition(existing ?? { status: 'NEW', lostReason: '' }, p.status, existing?.lostReason ?? '');
+      checkLeadTransition(existing ?? { status: 'NEW', lostReason: '' }, status, existing?.lostReason ?? '');
       if (existing && existing.customerId !== customer.id) {
         assert(existing.isDemo === customer.isDemo, 'Example and real customer records cannot be mixed.');
         assert(!data.quotations.some(q => q.leadId === existing.id && q.status !== 'DRAFT'), 'A lead with issued quotations cannot move to another customer.');
       }
-      const record: Lead = { ...p, id: existing?.id ?? crypto.randomUUID(), value: inputMoney(p.value),
-        lostReason: p.status === 'LOST' ? existing?.lostReason ?? '' : '', isDemo: customer.isDemo,
+      const record: Lead = { ...p, status, id: existing?.id ?? crypto.randomUUID(), value: inputMoney(p.value),
+        lostReason: status === 'LOST' ? existing?.lostReason ?? '' : '', isDemo: customer.isDemo,
         createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
       if (existing) Object.assign(existing, record); else data.leads.push(record);
       audit(data, action, 'lead', record.id, `${existing ? 'Updated' : 'Added'} lead ${record.title}`, stamp);

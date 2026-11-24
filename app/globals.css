@@ -124,3 +124,7 @@
 
 /* Keep every module and account control reachable on shorter screens. */
 .sidebar{overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}.sidebar>nav,.sidebar-bottom,.sidebar>.brand,.sidebar>.workspace-label{flex-shrink:0}
+
+/* Lead controls stay reachable on desktop and mobile. */
+.lead-status-action{width:100%;justify-content:center;margin-top:12px;min-height:38px}.lead-row-actions,.lead-detail-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.lead-row-actions{justify-content:flex-end}.lead-detail-actions{justify-content:flex-end;flex-shrink:0}.lead-detail-actions .button{min-height:40px}
+@media(max-width:600px){.lead-detail-actions{width:100%;justify-content:flex-start}.lead-detail-actions .button{flex:1;min-height:44px}.lead-status-action{min-height:44px}}
