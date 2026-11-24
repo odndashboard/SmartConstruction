@@ -5,6 +5,7 @@ import { operationsRpc } from './operations-server';
 import { CRMError } from './server-actions';
 import type { OperationsData } from './operations-types';
 import type { WorkspaceData } from './types';
+import { runServerRead, OPTIONAL_OPERATIONS_TIMEOUT_MS, type ServerReadOptions } from './server-read';
 
 export interface InitialWorkspace {
   workspace: WorkspaceData;
@@ -14,48 +15,19 @@ export interface InitialWorkspace {
 
 const OPERATIONS_UNAVAILABLE = 'Some dashboard summaries could not be loaded. Use Refresh overview to try again.';
 
-/** Abort reads at the deadline and still settle if the transport ignores abort. */
-function bootstrapRead<T>(name: string, args: Record<string, unknown>, timeoutMs: number) {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let stop: ((error: CRMError) => void) | undefined;
-  let settled = false;
-  const stopped = new Promise<never>((_resolve, reject) => {
-    stop = reject;
-    timer = setTimeout(() => {
-      controller.abort();
-      reject(new CRMError('The workspace is taking too long to respond. Please try again.', 503));
-    }, timeoutMs);
-  });
-  const promise = Promise.race([operationsRpc<T>(name, args, controller.signal), stopped]).finally(() => {
-    settled = true;
-    clearTimeout(timer);
-  });
-  return {
-    promise,
-    cancel() {
-      if (settled) return;
-      clearTimeout(timer);
-      controller.abort();
-      stop?.(new CRMError('The workspace read was cancelled.', 503));
-    },
-  };
-}
-
 /** One verified identity, two parallel live reads, and no cross-request cache. */
-export async function getInitialWorkspace(): Promise<InitialWorkspace> {
-  const identity = await authenticate();
-  const workspaceRead = bootstrapRead<WorkspaceData>('crm_workspace_read', {
-    p_actor_id: identity.userId, p_full_audit: false,
-  }, 10_000);
-  const operationsRead = bootstrapRead<OperationsData>('crm_operations_v2_read', {
-    p_actor_id: identity.userId, p_month: todayIST().slice(0, 7),
-  }, 5_000);
-
-  try {
+export async function getInitialWorkspace(options: ServerReadOptions = {}): Promise<InitialWorkspace> {
+  return runServerRead('dashboard', options, async read => {
+    const identity = await read.stage('auth', signal => authenticate(signal));
+    const workspaceRead = read.stage('workspace', signal => operationsRpc<WorkspaceData>('crm_workspace_read', {
+      p_actor_id: identity.userId, p_full_audit: false,
+    }, signal));
+    const operationsRead = read.stage('operations', signal => operationsRpc<OperationsData>('crm_operations_v2_read', {
+      p_actor_id: identity.userId, p_month: todayIST().slice(0, 7),
+    }, signal), OPTIONAL_OPERATIONS_TIMEOUT_MS);
     const [workspace, operationsResult] = await Promise.all([
-      workspaceRead.promise,
-      operationsRead.promise.then(operations => ({ operations, error: '' })).catch((error: unknown) => {
+      workspaceRead,
+      operationsRead.then(operations => ({ operations, error: '' })).catch((error: unknown) => {
         // Losing access is not an optional module failure. Never serialize an
         // earlier privileged snapshot after another source reports a denial.
         if (error instanceof CRMError && [401, 403].includes(error.status)) throw error;
@@ -75,8 +47,5 @@ export async function getInitialWorkspace(): Promise<InitialWorkspace> {
       return { workspace, operations: null, operationsError: OPERATIONS_UNAVAILABLE };
     }
     return { workspace, operations, operationsError: operationsResult.error };
-  } finally {
-    workspaceRead.cancel();
-    operationsRead.cancel();
-  }
+  });
 }

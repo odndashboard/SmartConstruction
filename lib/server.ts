@@ -4,6 +4,7 @@ import { authenticate } from './auth';
 import { createAdminClient } from './supabase/admin';
 import type { WorkspaceData } from './types';
 import { applyAction, assertActionRole, CRMError } from './server-actions';
+import { assertReadActive, runServerRead, type ServerReadOptions } from './server-read';
 export { CRMError } from './server-actions';
 
 const mutationSchema = z.object({
@@ -30,17 +31,24 @@ function databaseError(error: DatabaseError): CRMError {
   console.error('CRM database request failed', { code: code || 'UNKNOWN' });
   return new CRMError('The workspace could not save or load this request. Please try again.', 500);
 }
-async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
-  const { data, error } = await createAdminClient().rpc(name, args);
+async function rpc<T>(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  assertReadActive(signal);
+  const request = createAdminClient().rpc(name, args);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  assertReadActive(signal);
   if (error) throw databaseError(error);
   if (data == null) throw new CRMError('The workspace database returned an empty response.', 503);
   return data as T;
 }
 
 /** No login bootstrap: an Owner must explicitly invite every employee. */
-export async function getWorkspace(fullAudit = false): Promise<WorkspaceData> {
-  const identity = await authenticate();
-  return rpc<WorkspaceData>('crm_workspace_read', { p_actor_id: identity.userId, p_full_audit: fullAudit });
+export async function getWorkspace(fullAudit = false, options: ServerReadOptions = {}): Promise<WorkspaceData> {
+  return runServerRead('workspace', options, async read => {
+    const identity = await read.stage('auth', signal => authenticate(signal));
+    return read.stage('workspace', signal => rpc<WorkspaceData>('crm_workspace_read', {
+      p_actor_id: identity.userId, p_full_audit: fullAudit,
+    }, signal));
+  });
 }
 
 function sameOrigin(request: Request): void {

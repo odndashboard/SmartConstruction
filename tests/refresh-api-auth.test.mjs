@@ -25,10 +25,14 @@ const fixtures = {
     } } };
   }`),
   '@supabase/supabase-js': moduleUrl(`export function createClient() {
-    return { async rpc(name, args) {
-      const state = globalThis[Symbol.for('smart-construction.refresh-auth-test')];
-      state.rpcCalls.push({ name, args });
-      return { data: state.databaseError ? null : { ready: true }, error: state.databaseError };
+    return { rpc(name, args) {
+      let signal;
+      const request = { abortSignal(value) { signal = value; return request; }, then(resolve, reject) {
+        const state = globalThis[Symbol.for('smart-construction.refresh-auth-test')];
+        state.rpcCalls.push({ name, args, signal });
+        return Promise.resolve({ data: state.databaseError ? null : { ready: true }, error: state.databaseError }).then(resolve, reject);
+      } };
+      return request;
     } };
   }`),
 };
@@ -121,6 +125,7 @@ test('each authenticated refresh verifies Auth once, renews cookies and scopes t
     assert.equal(state.rpcCalls.length, 1);
     assert.equal(state.rpcCalls[0].name, route.rpc);
     assert.equal(state.rpcCalls[0].args.p_actor_id, state.user.id);
+    assert.ok(state.rpcCalls[0].signal instanceof AbortSignal);
   }
 });
 

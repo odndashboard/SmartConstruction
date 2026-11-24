@@ -9,7 +9,8 @@ import {
 import type { WorkspaceData } from '@/lib/types';
 import type { OperationsData } from '@/lib/operations-types';
 import { buildDashboardOverview } from '@/lib/dashboard-overview';
-import { readJson, ReadTimeoutError } from '@/lib/client-read';
+import { ReadTimeoutError } from '@/lib/client-read';
+import { DashboardRefreshError, readDashboardSnapshot } from '@/lib/dashboard-refresh';
 import styles from './DashboardOverview.module.css';
 
 type Destination = 'leads' | 'followups' | 'quotations' | 'workorders' | 'stock'
@@ -18,7 +19,8 @@ export type OverviewBootstrap = { identity: string; data: OperationsData | null;
 type Props = {
   workspace: WorkspaceData;
   navigate: (section: Destination, filter?: string) => void;
-  refreshWorkspace: (force?: boolean) => Promise<void>;
+  onWorkspaceRefreshed: (workspace: WorkspaceData) => void;
+  onRefreshError: (message: string, status?: number) => void;
   initialOverview?: OverviewBootstrap | null;
   onInitialOverviewUsed?: () => void;
 };
@@ -69,7 +71,7 @@ function Shortcut({ icon: Icon, title, detail, onClick }: { icon: typeof Package
   return <button type="button" className={styles.shortcut} onClick={onClick}><Icon size={17} strokeWidth={1.7} /><span><strong>{title}</strong><small>{detail}</small></span><ChevronRight size={15} /></button>;
 }
 
-export default function DashboardOverview({ workspace, navigate, refreshWorkspace, initialOverview = null, onInitialOverviewUsed }: Props) {
+export default function DashboardOverview({ workspace, navigate, onWorkspaceRefreshed, onRefreshError, initialOverview = null, onInitialOverviewUsed }: Props) {
   const identity = `${workspace.user.userId}:${workspace.user.role}:${workspace.user.active}`;
   const bootstrap = useRef(initialOverview?.identity === identity ? initialOverview : null);
   const [read, setRead] = useState<ReadState>(() => initialOverview?.identity === identity
@@ -77,48 +79,31 @@ export default function DashboardOverview({ workspace, navigate, refreshWorkspac
     : { identity: '', data: null, loading: true, error: '' });
   const sequence = useRef(0), request = useRef<AbortController | null>(null);
   const lastRead = useRef(0), mounted = useRef(false), pending = useRef(false);
-  const refreshCore = useRef(refreshWorkspace);
-  useEffect(() => { refreshCore.current = refreshWorkspace; }, [refreshWorkspace]);
-
-  const refresh = useCallback(async (includeWorkspace: boolean, forceWorkspace = true) => {
+  const refresh = useCallback(async () => {
     const next = ++sequence.current;
     request.current?.abort();
     const controller = new AbortController(); request.current = controller;
     pending.current = true;
     setRead(current => ({ identity, data: current.identity === identity ? current.data : null, loading: true, error: '' }));
-    // The workspace reports its own load errors; this timestamp applies only to operations.
-    let coreRead = includeWorkspace ? refreshCore.current(forceWorkspace).catch(() => undefined) : Promise.resolve();
     try {
-      const { response, body } = await readJson<OperationsData & { error?: string }>('/api/operations', { signal: controller.signal });
+      const snapshot = await readDashboardSnapshot({ userId: workspace.user.userId, role: workspace.user.role, active: workspace.user.active }, { signal: controller.signal });
       if (!mounted.current || next !== sequence.current) return;
-      if (!response.ok) {
-        setRead({ identity, data: null, loading: true, error: response.status === 401 ? 'Please sign in again to view your overview.' : body.error || 'The operations overview could not be loaded. Please try again.' });
-        if (response.status === 401 || response.status === 403) coreRead = refreshCore.current().catch(() => undefined);
-        return;
-      }
-      if (!body.extension || body.user?.userId !== workspace.user.userId || !body.user.active) {
-        setRead({ identity, data: null, loading: true, error: 'Your account details changed. Refresh the workspace to continue.' });
-        coreRead = refreshCore.current().catch(() => undefined);
-        return;
-      }
-      if (body.user.role !== workspace.user.role) {
-        setRead({ identity, data: null, loading: true, error: 'Your permissions changed. Refreshing your workspace…' });
-        coreRead = refreshCore.current().catch(() => undefined);
-        return;
-      }
+      onWorkspaceRefreshed(snapshot.workspace);
       lastRead.current = Date.now();
-      setRead({ identity, data: body, loading: true, error: '' });
+      setRead({ identity, data: snapshot.operations, loading: true, error: snapshot.operationsError });
     } catch (cause) {
       if (controller.signal.aborted || !mounted.current || next !== sequence.current) return;
-      setRead({ identity, data: null, loading: true, error: cause instanceof ReadTimeoutError ? cause.message : cause instanceof SyntaxError ? 'The server returned an incomplete overview. Please refresh.' : 'The operations overview could not be loaded. Check your connection and try again.' });
+      const error = cause instanceof ReadTimeoutError || cause instanceof DashboardRefreshError ? cause.message
+        : cause instanceof SyntaxError ? 'The server returned an incomplete overview. Please refresh.' : 'Your workspace could not be refreshed. Check your connection and try again.';
+      setRead({ identity, data: null, loading: true, error });
+      onRefreshError(error, cause instanceof DashboardRefreshError ? cause.status : undefined);
     } finally {
-      await coreRead;
       if (mounted.current && next === sequence.current) {
         pending.current = false;
         setRead(current => current.identity === identity ? { ...current, loading: false } : current);
       }
     }
-  }, [identity, workspace.user.userId, workspace.user.role]);
+  }, [identity, workspace.user.userId, workspace.user.role, workspace.user.active, onWorkspaceRefreshed, onRefreshError]);
 
   useEffect(() => {
     mounted.current = true;
@@ -129,10 +114,10 @@ export default function DashboardOverview({ workspace, navigate, refreshWorkspac
       lastRead.current = Date.now();
     } else {
       bootstrap.current = null;
-      void refresh(true, false);
+      void refresh();
     }
     const onReturn = () => {
-      if (!pending.current && document.visibilityState === 'visible' && Date.now() - lastRead.current >= 30_000) void refresh(true);
+      if (!pending.current && document.visibilityState === 'visible' && Date.now() - lastRead.current >= 30_000) void refresh();
     };
     window.addEventListener('focus', onReturn);
     document.addEventListener('visibilitychange', onReturn);
@@ -169,10 +154,10 @@ export default function DashboardOverview({ workspace, navigate, refreshWorkspac
   return <section className={styles.overview} aria-labelledby="dashboard-overview-title" aria-busy={loading}>
     <header className={styles.header}>
       <div><span className={styles.eyebrow}>YOUR WORKSPACE AT A GLANCE</span><h2 id="dashboard-overview-title">Business overview</h2><p>{ownerCard ? 'Projects, people, materials and payments in one place.' : 'Shared project progress, with your own attendance and expenses.'}</p></div>
-      <button type="button" className={styles.refresh} onClick={() => void refresh(true)} disabled={loading}><RefreshCw size={15} className={loading ? 'spin' : undefined} />{loading ? 'Refreshing' : 'Refresh overview'}</button>
+      <button type="button" className={styles.refresh} onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} className={loading ? 'spin' : undefined} />{loading ? 'Refreshing' : 'Refresh overview'}</button>
     </header>
     <div className={styles.context}><span><CalendarClock size={13} />{monthName(summary.month)} <i />India Standard Time</span><small>{current && operations ? `Operations updated ${refreshTime(current.serverTime)}${loading ? ' · refreshing…' : ''}` : loading ? 'Connecting to your operations…' : 'Operations unavailable'}</small></div>
-    {summaryError && <div className={styles.error} role="alert"><CircleAlert size={17} /><p>{summaryError}</p><button type="button" disabled={loading} onClick={() => void refresh(true)}>Try again <RefreshCw size={13} /></button></div>}
+    {summaryError && <div className={styles.error} role="alert"><CircleAlert size={17} /><p>{summaryError}</p><button type="button" disabled={loading} onClick={() => void refresh()}>Try again <RefreshCw size={13} /></button></div>}
 
     <div className={styles.grid}>
       <OverviewCard label="Open leads" value={integer(core.openLeads)} icon={UsersRound} detail={<><Money value={core.pipelinePaise} /> in potential work</>} footer="Current pipeline" onClick={() => navigate('leads')} />

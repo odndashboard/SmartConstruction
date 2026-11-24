@@ -18,7 +18,9 @@ const fixtures = {
   'next/headers': moduleUrl(`export async function cookies() { return globalThis[${fixtureSymbol}].cookies; }`),
   '@supabase/ssr': moduleUrl(`export function createServerClient(_url, _key, options) {
     return { auth: {
-      async getUser() { const state=globalThis[${fixtureSymbol}]; state.authCalls++; return { data: { user: state.authUsers.length ? state.authUsers.shift() : state.user }, error: state.authError }; },
+      async getUser() { const state=globalThis[${fixtureSymbol}]; state.authCalls++; state.authOptions.push(options);
+        if (state.auth) return state.auth(options);
+        return { data: { user: state.authUsers.length ? state.authUsers.shift() : state.user }, error: state.authError }; },
       async getClaims() { const state=globalThis[${fixtureSymbol}]; state.claimCalls++;
         if (state.renewCookie) options.cookies.setAll([{name:'sb-test-auth-token',value:'renewed-test-token',options:{httpOnly:true,path:'/'}}], {'Cache-Control':'public, max-age=3600'});
         return { data: { claims: { sub:'untrusted-claim-subject',role:'OWNER' } }, error: null }; }
@@ -46,6 +48,11 @@ const hooks = registerHooks({
   },
 });
 const { getInitialWorkspace } = await import('../lib/initial-workspace.ts');
+const { GET: dashboardGET } = await import('../app/api/dashboard/route.ts');
+const { GET: workspaceGET } = await import('../app/api/workspace/route.ts');
+const { GET: operationsGET } = await import('../app/api/operations/route.ts');
+const { SERVER_READ_TIMEOUT_MS } = await import('../lib/server-read.ts');
+const { mutateWorkspace } = await import('../lib/server.ts');
 const { proxy } = await import('../proxy.ts');
 const environment = {
   NEXT_PUBLIC_SUPABASE_URL: 'https://crm-tests.invalid',
@@ -63,9 +70,10 @@ function resultFor(name, args) {
   return { data: name === 'crm_workspace_read' ? { user, revision: 1 } : { user, permissions: { admin: user.role === 'OWNER', canWrite: true }, month: args.p_month, extension: {} }, error: null };
 }
 function reset() {
+  const cookieWrites = [];
   const state = {
-    user: authUser(OWNER), authUsers: [], authError: null, authCalls: 0, claimCalls: 0, rpcCalls: [], renewCookie: false,
-    cookies: { getAll: () => [], set() {} }, rpc: resultFor,
+    user: authUser(OWNER), authUsers: [], authError: null, auth: null, authOptions: [], authCalls: 0, claimCalls: 0, rpcCalls: [], renewCookie: false,
+    cookieWrites, cookies: { getAll: () => [], set(...args) { cookieWrites.push(args); } }, rpc: resultFor,
   };
   globalThis[fixtureKey] = state;
   return state;
@@ -182,4 +190,141 @@ test('page proxy renews cookies and keeps private headers while claims cannot au
   assert.match(response.headers.get('cache-control'), /private.*no-store/);
   await assert.rejects(getInitialWorkspace(), error => error.status === 401);
   assert.equal(state.authCalls, 1); assert.equal(state.rpcCalls.length, 0);
+});
+
+test('dashboard GET verifies one identity, reads both modules concurrently and exposes only phase timings', async () => {
+  const state = reset(), finish = new Map();
+  state.rpc = (name, args) => new Promise(resolve => finish.set(name, () => resolve(resultFor(name, args))));
+  const pending = dashboardGET(new Request('https://crm.example.test/api/dashboard'));
+  await setImmediate();
+  assert.equal(state.authCalls, 1);
+  assert.deepEqual([...finish.keys()].sort(), ['crm_operations_v2_read', 'crm_workspace_read']);
+  finish.get('crm_workspace_read')(); finish.get('crm_operations_v2_read')();
+  const response = await pending, body = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(Object.keys(body).sort(), ['operations', 'operationsError', 'workspace']);
+  assert.equal(body.workspace.user.userId, OWNER);
+  assert.equal(body.operations.user.userId, OWNER);
+  assert.match(response.headers.get('cache-control'), /private.*no-store/);
+  const timing = response.headers.get('server-timing');
+  assert.match(timing, /auth;dur=\d/); assert.match(timing, /workspace;dur=\d/);
+  assert.match(timing, /operations;dur=\d/); assert.match(timing, /total;dur=\d/);
+  assert.doesNotMatch(timing, /example|00000000|token|email/);
+});
+
+test('all refresh endpoints bound stalled Auth and reject late cookies and private reads', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const [path, handler] of [['dashboard', dashboardGET], ['workspace', workspaceGET], ['operations', operationsGET]]) {
+    const state = reset(); let finishAuth;
+    state.auth = () => new Promise(resolve => { finishAuth = resolve; });
+    const pending = handler(new Request(`https://crm.example.test/api/${path}`));
+    await setImmediate();
+    assert.equal(state.authCalls, 1); assert.equal(state.rpcCalls.length, 0);
+    t.mock.timers.tick(SERVER_READ_TIMEOUT_MS);
+    const response = await pending;
+    assert.equal(response.status, 503, path);
+    assert.match(response.headers.get('server-timing'), /total;dur=/);
+    state.authOptions[0].cookies.setAll([{ name: 'test-auth', value: 'late-token', options: {} }]);
+    finishAuth({ data: { user: authUser(OWNER) }, error: null });
+    await setImmediate();
+    assert.equal(state.cookieWrites.length, 0, path);
+    assert.equal(state.rpcCalls.length, 0, path);
+  }
+});
+
+test('one total deadline includes authentication time and aborts downstream RPCs', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const state = reset(); let finishAuth;
+  state.auth = () => new Promise(resolve => { finishAuth = resolve; });
+  state.rpc = () => new Promise(() => undefined);
+  const pending = dashboardGET(new Request('https://crm.example.test/api/dashboard'));
+  await setImmediate();
+  t.mock.timers.tick(7_000);
+  finishAuth({ data: { user: authUser(OWNER) }, error: null });
+  await setImmediate();
+  assert.equal(state.rpcCalls.length, 2);
+  t.mock.timers.tick(3_000);
+  const response = await pending;
+  assert.equal(response.status, 503);
+  assert.ok(state.rpcCalls.every(call => call.signal.aborted));
+});
+
+test('a disconnected refresh aborts Auth transport and cannot write cookies later', async t => {
+  const state = reset(), controller = new AbortController(); let fetchSignal;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    fetchSignal = init.signal;
+    return new Promise(() => undefined);
+  });
+  state.auth = async options => {
+    await options.global.fetch('https://crm-tests.invalid/auth/v1/user');
+    return { data: { user: authUser(OWNER) }, error: null };
+  };
+  const pending = dashboardGET(new Request('https://crm.example.test/api/dashboard', { signal: controller.signal }));
+  await setImmediate();
+  assert.ok(fetchSignal instanceof AbortSignal);
+  controller.abort();
+  assert.equal((await pending).status, 503);
+  assert.equal(fetchSignal.aborted, true);
+  state.authOptions[0].cookies.setAll([{ name: 'test-auth', value: 'late-token', options: {} }]);
+  assert.equal(state.cookieWrites.length, 0);
+  assert.equal(state.rpcCalls.length, 0);
+});
+
+test('a disconnected refresh aborts all in-flight RPCs and returns no private snapshot', async () => {
+  const state = reset(), controller = new AbortController();
+  state.rpc = () => new Promise(() => undefined);
+  const pending = dashboardGET(new Request('https://crm.example.test/api/dashboard', { signal: controller.signal }));
+  await setImmediate();
+  assert.equal(state.rpcCalls.length, 2);
+  controller.abort();
+  const response = await pending, body = await response.json();
+  assert.equal(response.status, 503);
+  assert.ok(state.rpcCalls.every(call => call.signal.aborted));
+  assert.equal(Object.hasOwn(body, 'workspace'), false);
+});
+
+test('combined refresh preserves 401/403 denials and treats Auth outages as retryable', async () => {
+  for (const status of [401, 403, 503]) {
+    const state = reset();
+    if (status === 401) state.user = null;
+    if (status === 403) state.user = { ...authUser(OWNER), email_confirmed_at: null };
+    if (status === 503) state.authError = { name: 'AuthRetryableFetchError', status: 503 };
+    const response = await dashboardGET(new Request('https://crm.example.test/api/dashboard'));
+    assert.equal(response.status, status);
+    assert.equal(state.rpcCalls.length, 0);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+  }
+});
+
+test('an operations denial or mixed role fails the complete dashboard response closed', async () => {
+  for (const denied of [true, false]) {
+    const state = reset();
+    state.rpc = (name, args) => {
+      if (name === 'crm_operations_v2_read' && denied) return { data: null, error: { code: 'PT403', message: 'Membership changed.' } };
+      const result = resultFor(name, args);
+      if (name === 'crm_operations_v2_read') result.data.user.role = 'SALES';
+      return result;
+    };
+    const response = await dashboardGET(new Request('https://crm.example.test/api/dashboard'));
+    assert.equal(response.status, 403);
+    const body = await response.json();
+    assert.equal(Object.hasOwn(body, 'workspace'), false);
+    assert.equal(Object.hasOwn(body, 'operations'), false);
+  }
+});
+
+test('mutation replays keep the existing receipt path without a read timeout or aborted Auth scope', async () => {
+  const state = reset();
+  const workspace = { user: member(OWNER), revision: 1 };
+  state.rpc = () => ({ data: { data: workspace, receiptMessage: 'Already saved.' }, error: null });
+  const result = await mutateWorkspace(new Request('https://crm.example.test/api/workspace', {
+    method: 'POST', headers: { origin: 'https://crm.example.test', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'lead_save', payload: {}, expectedRevision: 1, requestId: 'test-replayed-request' }),
+  }));
+  assert.deepEqual(result, { data: workspace, message: 'Already saved.' });
+  assert.equal(state.authCalls, 1);
+  assert.equal(state.authOptions[0].global, undefined);
+  assert.equal(state.rpcCalls.length, 1);
+  assert.equal(state.rpcCalls[0].name, 'crm_mutation_prepare');
+  assert.equal(state.rpcCalls[0].signal, undefined);
 });

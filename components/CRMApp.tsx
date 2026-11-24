@@ -16,6 +16,7 @@ import DashboardOverview, { type OverviewBootstrap } from './DashboardOverview';
 import type { OperationsData, OperationsSection } from '@/lib/operations-types';
 import { saveTextFile, printDocument } from '@/lib/native-platform';
 import { readJson } from '@/lib/client-read';
+import { mergeDashboardWorkspace, mergeWorkspaceUpdate } from '@/lib/dashboard-refresh';
 import { SignOutButton } from './SignOutButton';
 
 function TabLoading() {
@@ -164,12 +165,21 @@ export default function CRMApp({ initialWorkspace = null, initialOperations = nu
   const workspaceRequest = useRef<Promise<void> | null>(null);
   const workspaceController = useRef<AbortController | null>(null);
   const workspaceSequence = useRef(0), mounted = useRef(false);
-  const initialOverviewRead = useRef(!initialWorkspace);
-
-  const load = useCallback((force = true): Promise<void> => {
-    // The first overview mounts just after this same workspace was loaded.
-    // Later visits and every explicit refresh still request fresh records.
-    if (!force && initialOverviewRead.current) { initialOverviewRead.current = false; return Promise.resolve(); }
+  const currentWorkspace = useRef(initialWorkspace);
+  const accessGeneration = useRef(0);
+  const invalidateWorkspaceAccess = useCallback(() => { ++accessGeneration.current; }, []);
+  const updateWorkspace = useCallback((update: WorkspaceData | null | ((current: WorkspaceData | null) => WorkspaceData | null)) => {
+    const current = currentWorkspace.current;
+    const next = typeof update === 'function' ? update(current) : update;
+    const identity = (value: WorkspaceData | null) => value ? `${value.user.userId}:${value.user.role}:${value.user.active}` : '';
+    if (identity(current) !== identity(next)) invalidateWorkspaceAccess();
+    currentWorkspace.current = next;
+    setData(next);
+  }, [invalidateWorkspaceAccess]);
+  const applyWorkspaceUpdate = useCallback((next: WorkspaceData) => {
+    if (mounted.current) updateWorkspace(current => mergeWorkspaceUpdate(current, next));
+  }, [updateWorkspace]);
+  const load = useCallback((): Promise<void> => {
     if (workspaceRequest.current) return workspaceRequest.current;
     const controller = new AbortController(); workspaceController.current = controller;
     const sequence = ++workspaceSequence.current;
@@ -177,12 +187,15 @@ export default function CRMApp({ initialWorkspace = null, initialOperations = nu
       try {
         const { response, body: result } = await readJson<WorkspaceData & { data?: WorkspaceData; error?: string }>('/api/workspace', { signal: controller.signal });
         if (!mounted.current || sequence !== workspaceSequence.current) return;
-        if (response.status === 401) { setData(null); window.location.replace('/login'); return; }
-        if (!response.ok) { setData(null); throw new Error(response.status === 403 ? 'Your account no longer has access to this workspace. Please sign in again.' : result.error || 'Your workspace could not be loaded.'); }
+        if (response.status === 401) { updateWorkspace(null); window.location.replace('/login'); return; }
+        if (!response.ok) {
+          if (response.status === 403) updateWorkspace(null);
+          throw new Error(response.status === 403 ? 'Your account no longer has access to this workspace. Please sign in again.' : result.error || 'Your workspace could not be loaded.');
+        }
         setLoadError('');
         const next = result.data || result;
         // A dashboard refresh must not replace a newer successful edit.
-        setData(current => current && current.user.userId === next.user.userId && current.revision > next.revision ? current : next);
+        updateWorkspace(current => current && current.user.userId === next.user.userId && current.revision > next.revision ? current : next);
       } catch (error) {
         if (!controller.signal.aborted && mounted.current && sequence === workspaceSequence.current) setLoadError(error instanceof Error ? error.message : 'Unable to connect to your workspace.');
       } finally {
@@ -191,12 +204,27 @@ export default function CRMApp({ initialWorkspace = null, initialOperations = nu
     })();
     workspaceRequest.current = flight;
     return flight;
-  }, []);
+  }, [updateWorkspace]);
   useEffect(() => {
     mounted.current = true;
     if (!initialWorkspace && !initialError) void load();
-    return () => { mounted.current = false; workspaceController.current?.abort(); workspaceRequest.current = null; };
-  }, [initialWorkspace, initialError, load]);
+    return () => { mounted.current = false; invalidateWorkspaceAccess(); workspaceController.current?.abort(); workspaceRequest.current = null; };
+  }, [initialWorkspace, initialError, load, invalidateWorkspaceAccess]);
+  const applyDashboardWorkspace = useCallback((next: WorkspaceData) => {
+    if (!mounted.current) return;
+    updateWorkspace(current => mergeDashboardWorkspace(current, next));
+    setLoadError('');
+  }, [updateWorkspace]);
+  const handleDashboardRefreshError = useCallback((message: string, status?: number) => {
+    // A temporary failure is shown beside the overview's own retry button.
+    // An access failure must also remove every previously loaded private view.
+    if (!mounted.current || (status !== 401 && status !== 403)) return;
+    ++workspaceSequence.current;
+    workspaceController.current?.abort();
+    workspaceRequest.current = null;
+    updateWorkspace(null); setInitialOverview(null); setModal(null); setLoadError(message);
+    if (status === 401) window.location.replace('/login');
+  }, [updateWorkspace]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 5000); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => { const key = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); searchRef.current?.focus(); } }; document.addEventListener('keydown', key); return () => document.removeEventListener('keydown', key); }, []);
   const close = useCallback(() => { setModal(null); setModalError(''); }, []);
@@ -217,6 +245,7 @@ export default function CRMApp({ initialWorkspace = null, initialOperations = nu
 
   const mutate: Mutation = async (action, payload, shouldClose = true) => {
     if (!data || busy) return;
+    const generation = accessGeneration.current;
     setBusy(true); setModalError('');
     const fingerprint = JSON.stringify({ action, payload });
     const requestId = pendingRequests.current.get(fingerprint) || crypto.randomUUID();
@@ -230,11 +259,14 @@ export default function CRMApp({ initialWorkspace = null, initialOperations = nu
         throw new Error(result.error || 'The change could not be saved.');
       }
       pendingRequests.current.delete(fingerprint);
-      setData(result.data); setToast(result.message || 'Your changes have been saved.');
+      // The write's receipt still counts as complete, even if a concurrent read
+      // revoked access. Never put that earlier private response back on screen.
+      if (!mounted.current || generation !== accessGeneration.current) return;
+      applyWorkspaceUpdate(result.data); setToast(result.message || 'Your changes have been saved.');
       if (shouldClose) close();
       return result.data;
-    } catch (error) { setModalError(error instanceof Error ? error.message : 'Could not save. Please try again.'); }
-    finally { setBusy(false); }
+    } catch (error) { if (mounted.current && generation === accessGeneration.current) setModalError(error instanceof Error ? error.message : 'Could not save. Please try again.'); }
+    finally { if (mounted.current) setBusy(false); }
   };
 
   const deferredSearch = useDeferredValue(search);
@@ -282,7 +314,7 @@ export default function CRMApp({ initialWorkspace = null, initialOperations = nu
         {loadError && <div className="inline-alert"><CircleAlert size={17} />{loadError}<button onClick={() => void load()}>Retry</button></div>}
         {!modal && modalError && <div role="alert" className="inline-alert error"><CircleAlert size={17} />{modalError}<button onClick={() => setModalError('')} aria-label="Dismiss error"><X size={16} /></button></div>}
         {hasDemo && <div className="demo-banner"><span><Sparkles size={15} /><strong>Example workspace</strong><span>Sample records are marked and kept separate from your work.</span></span>{owner && <button disabled={busy} onClick={() => open({ type: 'clear_demo' })}>Clear examples <X size={14} /></button>}</div>}
-        {section === 'dashboard' && !searchText ? <Dashboard data={data} permissions={permissions} navigate={navigate} open={open} busy={busy} refreshWorkspace={load} initialOverview={initialOverview} onInitialOverviewUsed={consumeInitialOverview} /> : <>
+        {section === 'dashboard' && !searchText ? <Dashboard data={data} permissions={permissions} navigate={navigate} open={open} busy={busy} onWorkspaceRefreshed={applyDashboardWorkspace} onRefreshError={handleDashboardRefreshError} initialOverview={initialOverview} onInitialOverviewUsed={consumeInitialOverview} /> : <>
           <div className="page-heading"><div><span className="eyebrow">{section === 'settings' ? 'YOUR WORKSPACE' : section === 'dashboard' ? 'FIND YOUR WORK' : 'WORKSPACE'}</span><h1>{section === 'dashboard' ? 'Search results' : currentLabel}</h1><p>{({ leads: 'Every conversation. Every opportunity. A clear next step.', followups: 'Stay close to your customers and ahead of the next action.', quotations: 'Thoughtful proposals, precise pricing and clear approvals.', workorders: 'From a signed agreement to a job well done.', stock: 'Keep materials accounted for, from delivery to the job site.', attendance: owner ? 'A clear record of your team’s working days.' : 'Check in, check out and keep track of your working days.', expenses: owner ? 'Review submissions, approve expenses and see the complete picture.' : 'Record your expenses and follow their approval status.', payments: 'Track customer payments, due stages and outstanding work-order balances.', settings: 'Your company, your team and the way you work.', team_activity: 'See who changed what, when it happened and the details behind it.', dashboard: `Results for “${search}”` })[section]}</p></div><div className="heading-actions">{section !== 'settings' && section !== 'dashboard' && section !== 'team_activity' && !operationsSection && <button className="button button-secondary" onClick={exportList}><Download size={16} /><span>Export</span></button>}{section === 'leads' && commercial && <button className="button button-primary" onClick={() => open({ type: 'lead' })}><Plus size={17} />Add lead</button>}{section === 'followups' && follow && <button className="button button-primary" onClick={() => open({ type: 'followup' })}><Plus size={17} />Schedule follow-up</button>}{section === 'quotations' && commercial && <button className="button button-primary" onClick={() => open({ type: 'quote' })}><Plus size={17} />New quotation</button>}</div></div>
           {section === 'dashboard' && <SearchResults data={data} search={searchText} open={open} manageLeadStatus={manageLeadStatus} />}
           {section === 'leads' && <><div className="list-toolbar"><div className="tabs"><button className={filter === 'all' ? 'selected' : ''} onClick={() => setFilter('all')}>All leads <span>{data.leads.length}</span></button><button className={filter === 'NEW' ? 'selected' : ''} onClick={() => setFilter('NEW')}>New</button><button className={filter === 'WON' ? 'selected' : ''} onClick={() => setFilter('WON')}>Won</button><button className={filter === 'LOST' ? 'selected' : ''} onClick={() => setFilter('LOST')}>Lost</button></div><div className="view-toggle"><IconButton label="Board view" className={leadView === 'board' ? 'selected' : ''} onClick={() => setLeadView('board')}><LayoutGrid size={17} /></IconButton><IconButton label="List view" className={leadView === 'list' ? 'selected' : ''} onClick={() => setLeadView('list')}><List size={18} /></IconButton></div></div>{leadRecords.length ? leadView === 'board' && filter !== 'WON' && filter !== 'LOST' ? <LeadBoard data={data} leads={leadRecords} open={open} commercial={commercial} manageLeadStatus={manageLeadStatus} dashboard={false} /> : <LeadTable data={data} leads={leadRecords} open={open} manageLeadStatus={manageLeadStatus} /> : <div className="panel"><Empty icon={UsersRound} title="Your next project starts here" detail="Add an enquiry and keep its owner, site details and follow-ups together." action={commercial && <button className="button button-primary" onClick={() => open({ type: 'lead' })}><Plus size={17} />Add a lead</button>} /></div>}</>}
@@ -291,7 +323,7 @@ export default function CRMApp({ initialWorkspace = null, initialOperations = nu
           {section === 'workorders' && <><StatusTabs choices={[['all', 'All work orders'], ['PLANNED', 'Planned'], ['ACTIVE', 'In progress'], ['ON_HOLD', 'On hold'], ['COMPLETED', 'Completed']]} filter={filter} setFilter={setFilter} /><div className="workorder-grid">{data.workorders.filter(w => (filter === 'all' || w.status === filter) && `${w.title} ${w.number} ${w.customerName}`.toLowerCase().includes(searchText)).map(w => <WorkCard key={w.id} item={w} data={data} open={open} />)}</div>{!data.workorders.filter(w => (filter === 'all' || w.status === filter) && `${w.title} ${w.number} ${w.customerName}`.toLowerCase().includes(searchText)).length && <div className="panel"><Empty icon={HardHat} title="Ready for the next build" detail="Accept a quotation and create a work order to start tracking delivery." action={<button className="button button-secondary" onClick={() => navigate('quotations', 'ACCEPTED')}>View accepted quotations <ArrowRight size={16} /></button>} /></div>}</>}
           {section === 'team_activity' && owner && <TeamActivityPanel workspace={data} search={searchText} />}
           {operationsSection && <OperationsPanel key={section} section={section} workspace={data} search={searchText} />}
-          {section === 'settings' && <SettingsView data={data} owner={owner} busy={busy} mutate={mutate} open={open} onUpdated={setData} />}
+          {section === 'settings' && <SettingsView data={data} owner={owner} busy={busy} mutate={mutate} open={open} onUpdated={applyWorkspaceUpdate} />}
         </>}
         <footer className="workspace-footer"><span><span className="online-dot" />Your team’s work, in one place.</span><span>₹ INR <span>·</span> Asia/Kolkata</span></footer>
       </main></div>
@@ -324,7 +356,7 @@ function StatusTabs({ choices, filter, setFilter }: { choices: string[][]; filte
 
 type PermissionFlags = { commercial: boolean; approve: boolean; delivery: boolean; follow: boolean; owner: boolean; manageLeadStatus: boolean };
 type OpenModal = (modal: ModalState) => void;
-function Dashboard({ data, permissions: p, navigate, open, busy, refreshWorkspace, initialOverview, onInitialOverviewUsed }: { data: WorkspaceData; permissions: PermissionFlags; navigate: (s: Section, filter?: string) => void; open: OpenModal; busy: boolean; refreshWorkspace: (force?: boolean) => Promise<void>; initialOverview: OverviewBootstrap | null; onInitialOverviewUsed: () => void }) {
+function Dashboard({ data, permissions: p, navigate, open, busy, onWorkspaceRefreshed, onRefreshError, initialOverview, onInitialOverviewUsed }: { data: WorkspaceData; permissions: PermissionFlags; navigate: (s: Section, filter?: string) => void; open: OpenModal; busy: boolean; onWorkspaceRefreshed: (workspace: WorkspaceData) => void; onRefreshError: (message: string, status?: number) => void; initialOverview: OverviewBootstrap | null; onInitialOverviewUsed: () => void }) {
   const pipeline = data.leads.filter(l => !['WON', 'LOST'].includes(l.status));
   const next = data.followups.filter(f => f.status === 'OPEN').sort((a, b) => a.dueAt.localeCompare(b.dueAt)).slice(0, 4);
   const pending = data.quotations.filter(q => effectiveQuoteStatus(q) === 'ISSUED');
@@ -332,7 +364,7 @@ function Dashboard({ data, permissions: p, navigate, open, busy, refreshWorkspac
   const empty = !data.leads.length && !data.customers.length && !data.quotations.length && !data.workorders.length;
   const configured = !!(data.company.legalName && data.company.gstin && data.company.stateCode && data.company.address);
   return <><div className="page-heading dashboard-heading"><div><span className="date-eyebrow"><CalendarDays size={14} />{new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span><h1>Workspace overview<span className="heading-dot">.</span></h1><p>Welcome back, {data.user.name.split(' ')[0]}. Your projects, people and daily operations in one place.</p></div>{p.commercial && <button className="button button-primary" onClick={() => open({ type: 'lead' })}><Plus size={18} />Add new lead</button>}</div>
-    <DashboardOverview workspace={data} navigate={navigate} refreshWorkspace={refreshWorkspace} initialOverview={initialOverview} onInitialOverviewUsed={onInitialOverviewUsed} />
+    <DashboardOverview workspace={data} navigate={navigate} onWorkspaceRefreshed={onWorkspaceRefreshed} onRefreshError={onRefreshError} initialOverview={initialOverview} onInitialOverviewUsed={onInitialOverviewUsed} />
     {empty ? <><section className="welcome-panel"><div className="welcome-copy"><span className="welcome-label"><span />START YOUR NEXT PROJECT</span><h2>Build relationships.<br />Deliver great work.</h2><p>Add a lead with its customer details, then follow the project through quotation and delivery. Your daily operations are available in the overview above.</p><div className="welcome-actions">{p.commercial && <button className="button button-primary" onClick={() => open({ type: 'lead' })}><Plus size={18} />Add your first lead</button>}{p.owner && <button className="button button-light" disabled={busy} onClick={() => open({ type: 'load_demo' })}><Sparkles size={17} />Explore example workspace</button>}</div><span className="welcome-note"><ShieldCheck size={14} />Private access · Cloud saved · Ready for your team</span></div><div className="welcome-illustration" aria-hidden="true"><div className="blueprint-grid" /><div className="building building-back"><i /><i /><i /><i /><i /><i /></div><div className="building building-front"><i /><i /><i /><i /><i /><i /><i /><i /><i /></div><div className="illustration-chip"><CheckCircle2 size={17} />A stronger foundation</div></div></section><div className="setup-steps"><button onClick={() => navigate('settings')}><span className={`step-number${configured ? ' complete' : ''}`}>{configured ? <Check size={18} /> : '01'}</span><div><h3>Set up your company</h3><p>Add your GST registration and company details.</p></div><ArrowUpRight size={20} /></button><button onClick={() => p.commercial && open({ type: 'lead' })} disabled={!p.commercial}><span className="step-number">02</span><div><h3>Add your first lead</h3><p>Capture the project and customer details together.</p></div><ArrowUpRight size={20} /></button><button onClick={() => p.follow && open({ type: 'followup' })} disabled={!p.follow || !data.leads.length}><span className="step-number">03</span><div><h3>Plan the next action</h3><p>Schedule a call or site visit for your lead.</p></div><ArrowUpRight size={20} /></button></div></> : <>
 
     <section className="panel pipeline-panel"><PanelHeader title="Lead pipeline" eyebrow="FROM FIRST HELLO TO HANDSHAKE"><button className="text-link" onClick={() => navigate('leads')}>View all leads <ArrowUpRight size={16} /></button></PanelHeader><LeadBoard data={data} leads={pipeline} open={open} commercial={p.commercial} manageLeadStatus={p.manageLeadStatus} dashboard /></section>

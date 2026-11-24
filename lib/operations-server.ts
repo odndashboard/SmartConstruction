@@ -7,6 +7,7 @@ import { todayIST } from './finance';
 import { operationsMonthSchema, operationsMutationSchema, teamActivityQuerySchema } from './operations-validation';
 import type { OperationsData, StockItem, StockMovement, AttendanceRecord, Expense, TeamActivityData } from './operations-types';
 import type { OperationsExtension } from './operations-extensions';
+import { assertReadActive, runServerRead, type ServerReadOptions } from './server-read';
 
 interface OperationsExport {
   revision: number; stockItems: StockItem[]; stockMovements: StockMovement[];
@@ -15,9 +16,10 @@ interface OperationsExport {
 }
 
 export async function operationsRpc<T>(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  assertReadActive(signal);
   const request = createAdminClient().rpc(name, args);
   const { data, error } = await (signal ? request.abortSignal(signal) : request);
-  if (signal?.aborted) throw new CRMError('This module is taking too long to respond. Please try again.', 503);
+  assertReadActive(signal);
   if (error) {
     const code = error.code ?? '';
     if (/^PT(400|401|403|404|409|503)$/.test(code)) throw new CRMError(error.message || 'This operation was not permitted.', Number(code.slice(2)));
@@ -42,11 +44,15 @@ async function payloadHash(action: string, payload: unknown): Promise<string> {
   return [...new Uint8Array(result)].map(value => value.toString(16).padStart(2, '0')).join('');
 }
 
-export async function getOperations(monthInput?: string | null): Promise<OperationsData> {
-  const identity = await authenticate();
+export async function getOperations(monthInput?: string | null, options: ServerReadOptions = {}): Promise<OperationsData> {
   const parsed = operationsMonthSchema.safeParse(monthInput ?? todayIST().slice(0, 7));
   if (!parsed.success) throw new CRMError('Choose a valid month.');
-  return operationsRpc<OperationsData>('crm_operations_v2_read', { p_actor_id: identity.userId, p_month: parsed.data });
+  return runServerRead('operations', options, async read => {
+    const identity = await read.stage('auth', signal => authenticate(signal));
+    return read.stage('operations', signal => operationsRpc<OperationsData>('crm_operations_v2_read', {
+      p_actor_id: identity.userId, p_month: parsed.data,
+    }, signal));
+  });
 }
 
 export async function mutateOperations(request: Request): Promise<{ data: OperationsData; message: string }> {
@@ -67,8 +73,7 @@ export async function getOperationsExport(): Promise<OperationsExport> {
   return operationsRpc<OperationsExport>('crm_operations_v2_export', { p_actor_id: identity.userId });
 }
 
-export async function getTeamActivity(searchParams: URLSearchParams): Promise<TeamActivityData> {
-  const identity = await authenticate();
+export async function getTeamActivity(searchParams: URLSearchParams, options: ServerReadOptions = {}): Promise<TeamActivityData> {
   const raw = Object.fromEntries(searchParams);
   if (!Object.hasOwn(raw, 'month')) raw.month = todayIST().slice(0, 7);
   const parsed = teamActivityQuerySchema.safeParse(raw);
@@ -76,8 +81,11 @@ export async function getTeamActivity(searchParams: URLSearchParams): Promise<Te
   const input = parsed.data;
   // The SQL function independently requires the current Owner role. A query
   // filter selects whose work to inspect; it can never select the caller.
-  return operationsRpc<TeamActivityData>('crm_team_activity_read', {
-    p_actor_id: identity.userId, p_month: input.month, p_employee_id: input.employeeId ?? null,
-    p_module: input.module, p_page: input.page,
+  return runServerRead('team_activity', options, async read => {
+    const identity = await read.stage('auth', signal => authenticate(signal));
+    return read.stage('team_activity', signal => operationsRpc<TeamActivityData>('crm_team_activity_read', {
+      p_actor_id: identity.userId, p_month: input.month, p_employee_id: input.employeeId ?? null,
+      p_module: input.module, p_page: input.page,
+    }, signal));
   });
 }
