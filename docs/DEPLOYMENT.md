@@ -20,7 +20,7 @@ Page bootstrap starts workspace and operations RPCs together for the same verifi
 
 Open the Supabase project you want to use for the CRM. Use a new/dedicated database if the current project belongs to another application.
 
-In the project's SQL Editor, open and run the entire file in `supabase/migrations/` ending in `_crm.sql`. The migration is one transaction. It creates the private `crm` schema and restricted public RPC functions; it does not seed sample customers or public access policies.
+Apply the files in `supabase/migrations/` in filename order, starting with the file ending in `_crm.sql`. The initial migration creates the private `crm` schema and restricted public RPC functions; later migrations add operations, site/stock extensions, and the Accountant role with lead-status permissions. Each file runs as a transaction. Do not rerun migrations already recorded in the project's migration history. No migration seeds sample customers or public access policies.
 
 The Supabase Data API must be enabled with `public` exposed so the server can call those RPC functions. **Do not expose the `crm` schema** and do not grant anon/authenticated access to its tables or RPCs.
 

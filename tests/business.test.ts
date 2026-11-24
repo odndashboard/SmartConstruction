@@ -7,7 +7,7 @@ import type { Company, Member, Role, WorkspaceData, QuoteItemInput } from '../li
 const NOW = new Date('2026-11-23T06:00:00Z');
 
 function workspace(configured = true): WorkspaceData {
-  const members: Member[] = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'VIEWER'] as Role[]).map(role => ({
+  const members: Member[] = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]).map(role => ({
     userId: `test-${role.toLowerCase()}`, name: `Test ${role}`, email: `${role.toLowerCase()}@example.invalid`, role, active: true,
   }));
   return {
@@ -117,6 +117,82 @@ describe('server-side authorization and input boundaries', () => {
     act(data, 'member_role', { userId: 'test-viewer', role: 'SALES' });
     assert.equal(data.members.find(member => member.userId === 'test-viewer')!.role, 'SALES');
     assert.equal(data.members.filter(member => member.role === 'OWNER' && member.active).length, 1);
+  });
+
+  test('owners can assign Accountant and accountants cannot mutate core CRM or team records', () => {
+    const data = workspace();
+    act(data, 'member_role', { userId: 'test-viewer', role: 'ACCOUNTANT' });
+    assert.equal(data.members.find(member => member.userId === 'test-viewer')!.role, 'ACCOUNTANT');
+    setRole(data, 'ACCOUNTANT');
+    for (const action of [
+      'customer_save', 'lead_save', 'lead_status', 'followup_save', 'followup_complete', 'followup_cancel',
+      'quote_save', 'quote_revise', 'quote_issue', 'quote_accept', 'quote_decline', 'quote_convert',
+      'workorder_save', 'milestone_add', 'milestone_complete', 'company_save', 'member_role', 'member_active',
+      'load_demo', 'clear_demo',
+    ]) expectDenied(() => act(data, action, {}));
+    for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+      const restricted = workspace(); setRole(restricted, role);
+      expectDenied(() => act(restricted, 'member_role', { userId: 'test-sales', role: 'ACCOUNTANT' }));
+    }
+  });
+
+  test('only owners and managers can move a lead through authorized status transitions', () => {
+    for (const role of ['OWNER', 'MANAGER'] as Role[]) {
+      const data = workspace(); const lead = addLead(data);
+      setRole(data, role);
+      act(data, 'lead_status', { id: lead.id, status: 'CONTACTED' });
+      assert.equal(lead.status, 'CONTACTED');
+      act(data, 'lead_status', { id: lead.id, status: 'LOST', lostReason: 'Customer deferred the site project.' });
+      assert.equal(lead.status, 'LOST');
+      assert.equal(lead.lostReason, 'Customer deferred the site project.');
+      assert.throws(() => act(data, 'lead_status', { id: lead.id, status: 'NEGOTIATION' }), CRMError);
+      act(data, 'lead_status', { id: lead.id, status: 'NEW' });
+      assert.equal(lead.status, 'NEW');
+      assert.equal(lead.lostReason, '');
+      assert.throws(() => act(data, 'lead_status', { id: lead.id, status: 'WON' }), CRMError);
+    }
+    for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+      const data = workspace(); const lead = addLead(data); const before = structuredClone(lead);
+      setRole(data, role);
+      expectDenied(() => act(data, 'lead_status', { id: lead.id, status: 'CONTACTED' }));
+      assert.deepEqual(lead, before);
+    }
+  });
+
+  test('sales can edit lead details but cannot forge status changes through lead_save', () => {
+    const data = workspace(); const lead = addLead(data);
+    act(data, 'lead_status', { id: lead.id, status: 'CONTACTED' });
+    setRole(data, 'SALES');
+    const input = { id: lead.id, customerId: lead.customerId, title: lead.title, value: '250000' };
+    for (const status of ['NEW', 'SITE_VISIT', 'QUOTED', 'NEGOTIATION', 'LOST', 'WON']) {
+      expectDenied(() => act(data, 'lead_save', { ...input, status }));
+      assert.equal(lead.status, 'CONTACTED');
+    }
+    act(data, 'lead_save', { ...input, title: 'Updated project details', status: 'CONTACTED' });
+    assert.equal(lead.title, 'Updated project details');
+    assert.equal(lead.status, 'CONTACTED');
+    act(data, 'lead_save', { ...input, title: 'Updated with status omitted' });
+    assert.equal(lead.title, 'Updated with status omitted');
+    assert.equal(lead.status, 'CONTACTED');
+    const create = { customerId: lead.customerId, title: 'New enquiry' };
+    expectDenied(() => act(data, 'lead_save', { ...create, status: 'CONTACTED' }));
+    act(data, 'lead_save', create);
+    assert.equal(data.leads.at(-1)!.status, 'NEW');
+  });
+
+  test('authorized lead edits preserve status when omitted and cannot bypass won or lost rules', () => {
+    const data = workspace(); const quote = acceptedQuote(data);
+    const lead = data.leads.find(record => record.id === quote.leadId)!;
+    setRole(data, 'MANAGER');
+    const input = { id: lead.id, customerId: lead.customerId, title: lead.title };
+    act(data, 'lead_save', { ...input, title: 'Updated won project details' });
+    assert.equal(lead.status, 'WON');
+    assert.throws(() => act(data, 'lead_save', { ...input, status: 'NEW' }), CRMError);
+    const openLead = addLead(data);
+    const openInput = { id: openLead.id, customerId: openLead.customerId, title: openLead.title };
+    assert.throws(() => act(data, 'lead_save', { ...openInput, status: 'LOST' }), CRMError);
+    act(data, 'lead_save', { ...openInput, status: 'SITE_VISIT' });
+    assert.equal(openLead.status, 'SITE_VISIT');
   });
 });
 

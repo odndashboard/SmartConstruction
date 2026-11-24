@@ -107,8 +107,8 @@ test('financial overview preserves totals larger than the JavaScript safe intege
   assert.equal(result.operations?.expenses.allTimeTotals?.paidPaise, '19800000000000001');
 });
 
-test('employee and Manager summaries do not expose elevated financial, team or attendance aggregates', () => {
-  for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'VIEWER'] as Role[]) {
+test('employee, Manager and Accountant summaries do not expose elevated financial, team or attendance aggregates', () => {
+  for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
     const person = { ...employee, role }, data = workspace(person), ops = operations(person);
     ops.extension.attendanceCalendar = [attendance(person.userId), attendance(owner.userId)];
     ops.extension.attendanceSummary = [summary(person.userId, 100), summary(owner.userId, 9000)];

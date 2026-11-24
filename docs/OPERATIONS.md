@@ -1,10 +1,10 @@
 # Sites, stock, attendance, expenses and customer payments
 
-These modules extend the existing Smart Construction CRM. They share the same employee accounts, mobile and desktop interface, and live website used by the Android application. The existing `OWNER` role is the administrator for these modules. A `MANAGER` is an employee for attendance and expense privacy.
+These modules extend the existing Smart Construction CRM. They share the same employee accounts, mobile and desktop interface, and live website used by the Android application. The existing `OWNER` role is the administrator for these modules. `MANAGER` and `ACCOUNTANT` roles are employees for attendance and expense privacy.
 
 ## Dashboard overview
 
-The Dashboard tab brings the sales pipeline and operations into one overview, including when there are no leads yet. Summary cards open the relevant module. It shows current leads, follow-ups, quotations, work orders and stock, today's attendance, and clearly labelled monthly expense/attendance information. Customers, sites and material requests remain reachable from the overview; the Owner also sees payment balances, purchase orders and Team activity access.
+The Dashboard tab brings the sales pipeline and operations into one overview, including when there are no leads yet. Summary cards open the relevant module. It shows current leads, follow-ups, quotations, work orders and stock, today's attendance, and clearly labelled monthly expense/attendance information. Sites and material requests remain reachable from the overview; the Owner also sees payment balances, purchase orders and Team activity access. Customer details are managed within leads rather than through a separate Customers tab or shortcut.
 
 The overview uses the existing authenticated operations endpoint and retains its permissions. Employees receive only their own attendance, assignment and expenses; company expense totals, customer payments and administrator controls require the current Owner role. Missing or failed operational reads show an unavailable/loading state, not a zero balance. Monetary aggregates use exact integer paise, and stock quantities with different units are never added into a single total.
 
@@ -18,7 +18,7 @@ Dashboard, Team activity and operations reads have a 15-second deadline, includi
 
 ## Access rules
 
-| Action | Owner/admin | Manager, Sales, Operations | Viewer |
+| Action | Owner/admin | Manager, Sales, Operations, Accountant | Viewer |
 | --- | --- | --- | --- |
 | View stock and its movement history | Yes | Yes | Yes |
 | Create a stock item; record stock in/out | Yes | Yes | No |

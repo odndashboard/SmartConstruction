@@ -20,6 +20,7 @@ const ids = {
   outsider: '00000000-0000-4000-8000-000000000006',
   pending: '00000000-0000-4000-8000-000000000007',
   secondOwner: '00000000-0000-4000-8000-000000000008',
+  accountant: '00000000-0000-4000-8000-000000000009',
 };
 const NOW = new Date('2026-11-23T06:00:00Z');
 const hash = 'a'.repeat(64);
@@ -127,6 +128,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     `);
     const migration = await readFile(new URL('../supabase/migrations/202611230001_crm.sql', import.meta.url), 'utf8');
     await db.exec(migration);
+    await db.exec(await readFile(new URL('../supabase/migrations/20261124072200_accountant_and_lead_status.sql', import.meta.url), 'utf8'));
   });
 
   beforeEach(async () => {
@@ -244,6 +246,87 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     );
     assert.equal(prepared.receiptMessage, first.message);
     assert.equal(prepared.data.revision, first.data.revision);
+  });
+
+  test('Accountant enrollment and role changes remain Owner-only and never grant CRM writes', async () => {
+    await bootstrap();
+    await addMember(ids.accountant, 'accountant', 'ACCOUNTANT');
+    await addMember(ids.sales, 'sales', 'SALES');
+    assert.equal((await read(ids.accountant)).user.role, 'ACCOUNTANT');
+    await addMember(ids.accountant, 'accountant', 'OWNER');
+    assert.equal((await read(ids.accountant)).user.role, 'ACCOUNTANT', 'Enrollment retry cannot promote an existing Accountant');
+    await mutate('member_role', { userId: ids.sales, role: 'ACCOUNTANT' });
+    assert.equal((await read(ids.sales)).user.role, 'ACCOUNTANT');
+    await rejectsSql(() => addMember(ids.viewer, 'viewer', 'ACCOUNTANT', ids.accountant), 'PT403');
+    for (const action of ['customer_save', 'lead_save', 'lead_status', 'followup_save', 'quote_save', 'quote_issue', 'workorder_save', 'company_save', 'member_role', 'member_active']) {
+      const before = await read(ids.accountant);
+      await rejectsSql(() => commit({ actor: ids.accountant, expectedRevision: before.revision, requestId: crypto.randomUUID(), action, payloadHash: hash, changes: emptyChanges(before), message: 'Forbidden Accountant action' }), 'PT403');
+    }
+    await mutate('member_role', { userId: ids.accountant, role: 'MANAGER' });
+    assert.equal((await read(ids.accountant)).user.role, 'MANAGER');
+  });
+
+  test('Admin and Manager change lead status; Sales and Accountant cannot forge the dedicated action', async () => {
+    await bootstrap();
+    await addMember(ids.manager, 'manager', 'MANAGER');
+    await addMember(ids.sales, 'sales', 'SALES');
+    await addMember(ids.accountant, 'accountant', 'ACCOUNTANT');
+    const customer = (await mutate('customer_save', { name: 'Lead status client' })).data.customers[0];
+    const lead = (await mutate('lead_save', { customerId: customer.id, title: 'Lead status project' })).data.leads[0];
+    await mutate('lead_status', { id: lead.id, status: 'CONTACTED' });
+    await mutate('lead_status', { id: lead.id, status: 'SITE_VISIT' }, ids.manager);
+    for (const actor of [ids.sales, ids.accountant]) {
+      const forged = plan(await read(), 'lead_status', { id: lead.id, status: 'NEGOTIATION' });
+      await rejectsSql(() => commit({ ...forged, actor }), 'PT403');
+    }
+    assert.equal((await read()).leads[0].status, 'SITE_VISIT');
+    await mutate('lead_status', { id: lead.id, status: 'LOST', lostReason: 'Client postponed construction' }, ids.manager);
+    assert.equal((await read()).leads[0].lostReason, 'Client postponed construction');
+    await mutate('lead_status', { id: lead.id, status: 'NEW' });
+    assert.equal((await read()).leads[0].lostReason, '');
+  });
+
+  test('Sales cannot bypass lead status permissions through forged lead_save rows or new leads', async () => {
+    await bootstrap();
+    await addMember(ids.sales, 'sales', 'SALES');
+    const customer = (await mutate('customer_save', { name: 'Forged status client' })).data.customers[0];
+    const lead = (await mutate('lead_save', { customerId: customer.id, title: 'Sales project' }, ids.sales)).data.leads[0];
+    const forgedEdit = plan(await read(), 'lead_save', { id: lead.id, customerId: customer.id, title: lead.title, status: 'NEGOTIATION' });
+    await rejectsSql(() => commit({ ...forgedEdit, actor: ids.sales }), 'PT403');
+    const forgedCreate = plan(await read(), 'lead_save', { customerId: customer.id, title: 'Forged new status', status: 'CONTACTED' });
+    await rejectsSql(() => commit({ ...forgedCreate, actor: ids.sales }), 'PT403');
+    await mutate('lead_status', { id: lead.id, status: 'CONTACTED' });
+    const saved = await mutate('lead_save', { id: lead.id, customerId: customer.id, title: 'Updated details without changing stage', notes: 'Called customer' }, ids.sales);
+    assert.equal(saved.data.leads[0].status, 'CONTACTED');
+    assert.equal(saved.data.leads[0].notes, 'Called customer');
+    assert.equal(saved.data.leads.length, 1);
+  });
+
+  test('SQL status guard preserves lost reasons, reopening rules and automatic Won status', async () => {
+    await bootstrap();
+    const customer = (await mutate('customer_save', { name: 'Transition client' })).data.customers[0];
+    const lead = (await mutate('lead_save', { customerId: customer.id, title: 'Transition project' })).data.leads[0];
+    const forgeStatus = async (status: string, lostReason = '') => {
+      const before = await read(); const changes = emptyChanges(before);
+      changes.upserts.leads = [{ ...before.leads[0], status, lostReason }];
+      return commit({ actor: ids.owner, expectedRevision: before.revision, requestId: crypto.randomUUID(), action: 'lead_status', payloadHash: hash, changes, message: 'Forged transition' });
+    };
+    await rejectsSql(() => forgeStatus('WON'), 'PT400');
+    await rejectsSql(() => forgeStatus('LOST'), 'PT400');
+    await mutate('lead_status', { id: lead.id, status: 'LOST', lostReason: 'Postponed' });
+    await rejectsSql(() => forgeStatus('NEGOTIATION'), 'PT400');
+    await mutate('lead_status', { id: lead.id, status: 'NEW' });
+    assert.equal((await read()).leads[0].status, 'NEW');
+  });
+
+  test('a prepared Manager status change cannot be committed after downgrade to Sales', async () => {
+    await bootstrap(); await addMember(ids.manager, 'manager', 'MANAGER');
+    const customer = (await mutate('customer_save', { name: 'Downgrade client' })).data.customers[0];
+    const lead = (await mutate('lead_save', { customerId: customer.id, title: 'Downgrade project' })).data.leads[0];
+    const pending = plan(await read(ids.manager), 'lead_status', { id: lead.id, status: 'CONTACTED' });
+    await mutate('member_role', { userId: ids.manager, role: 'SALES' });
+    await rejectsSql(() => commit(pending), 'PT403');
+    assert.equal((await read()).leads[0].status, 'NEW');
   });
 
   test('a receipt cannot be reused for a different payload, action, or actor', async () => {

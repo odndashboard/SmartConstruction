@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowUpRight, Building2, CalendarCheck2, CalendarClock, CheckCircle2, ChevronRight,
-  CircleAlert, ContactRound, FileText, HardHat, IndianRupee, MapPin, Package,
+  CircleAlert, FileText, HardHat, IndianRupee, MapPin, Package,
   ReceiptText, RefreshCw, ShieldCheck, ShoppingCart, Truck, UsersRound,
 } from 'lucide-react';
 import type { WorkspaceData } from '@/lib/types';
@@ -12,7 +12,7 @@ import { buildDashboardOverview } from '@/lib/dashboard-overview';
 import { readJson, ReadTimeoutError } from '@/lib/client-read';
 import styles from './DashboardOverview.module.css';
 
-type Destination = 'leads' | 'followups' | 'quotations' | 'workorders' | 'customers' | 'stock'
+type Destination = 'leads' | 'followups' | 'quotations' | 'workorders' | 'stock'
   | 'attendance' | 'expenses' | 'payments' | 'team_activity' | 'settings';
 export type OverviewBootstrap = { identity: string; data: OperationsData | null; error: string };
 type Props = {
@@ -192,7 +192,6 @@ export default function DashboardOverview({ workspace, navigate, refreshWorkspac
     </div>
 
     <div className={styles.shortcuts} aria-label="More workspace modules">
-      <Shortcut icon={ContactRound} title="Customers" detail={`${integer(core.customers)} customer${core.customers === 1 ? '' : 's'}`} onClick={() => navigate('customers')} />
       {operations && <>
         <Shortcut icon={Building2} title="Construction sites" detail={`${integer(operations.sites.activeSites)} active site${operations.sites.activeSites === 1 ? '' : 's'}`} onClick={() => navigate('attendance')} />
         <Shortcut icon={Truck} title={owner ? 'Material requests' : 'Your material requests'} detail={`${integer(operations.materialRequests.open)} open request${operations.materialRequests.open === 1 ? '' : 's'}`} onClick={() => navigate('stock')} />

@@ -14,8 +14,9 @@ const ids = {
   viewer: '20000000-0000-4000-8000-000000000005', removed: '20000000-0000-4000-8000-000000000006',
   outsider: '20000000-0000-4000-8000-000000000007', pending: '20000000-0000-4000-8000-000000000008',
   anonymous: '20000000-0000-4000-8000-000000000009', banned: '20000000-0000-4000-8000-000000000010',
+  accountant: '20000000-0000-4000-8000-000000000011',
 };
-const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql'];
+const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql'];
 let db: PGlite;
 let today: string;
 let month: string;
@@ -30,7 +31,7 @@ async function initialize(database: PGlite, extensions = true) {
     CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$ SELECT coalesce(nullif(current_setting('request.jwt.claims',true),''),'{}')::jsonb->>'role'; $$;
     GRANT USAGE ON SCHEMA auth TO anon,authenticated,service_role; GRANT EXECUTE ON FUNCTION auth.role() TO anon,authenticated,service_role;
     CREATE SCHEMA storage; CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`);
-  for (const file of migrations.slice(0, extensions ? 3 : 2)) await database.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
+  for (const file of migrations.slice(0, extensions ? migrations.length : 2)) await database.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
 }
 async function query<T>(sql: string, values: unknown[] = []): Promise<T> {
   return (await db.query<{ result: T }>(sql, values)).rows[0]?.result as T;
@@ -130,7 +131,7 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     for (const [name, id] of Object.entries(ids)) await db.query('INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data) VALUES($1,$2,now(),$3)', [id, `${name}@example.invalid`, JSON.stringify({ name })]);
     today = await query<string>("SELECT ((clock_timestamp() at time zone 'Asia/Kolkata')::date)::text AS result"); month = today.slice(0, 7);
     await role('service_role'); await query('SELECT public.crm_bootstrap_owner($1::uuid) AS result', [ids.owner]);
-    for (const [name, memberRole] of Object.entries({ manager: 'MANAGER', sales: 'SALES', operations: 'OPERATIONS', viewer: 'VIEWER', removed: 'SALES', pending: 'SALES', anonymous: 'SALES', banned: 'SALES' })) {
+    for (const [name, memberRole] of Object.entries({ manager: 'MANAGER', sales: 'SALES', operations: 'OPERATIONS', accountant: 'ACCOUNTANT', viewer: 'VIEWER', removed: 'SALES', pending: 'SALES', anonymous: 'SALES', banned: 'SALES' })) {
       await query('SELECT public.crm_add_member($1::uuid,$2::uuid,$3,$4,$5) AS result', [ids.owner, ids[name as keyof typeof ids], name, `${name}@example.invalid`, memberRole]);
     }
     await role('postgres');
@@ -178,6 +179,45 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     }
     for (const action of ['stock_transfer', 'stock_return', 'material_request_create', 'attendance_check_in']) await rejects(() => mutate(action, {}, ids.viewer), 'PT403');
     await rejects(() => mutate('stock_location_move', { type: ' ADJUST ' }, ids.manager), 'PT403');
+  });
+
+  test('Accountant uses shared stock, own attendance and expenses without Admin financial or activity access', async () => {
+    const material = await item();
+    const mainStore = (await read()).extension.sites.find(row => row.system)!;
+    const assignedSite = await site('Accountant assigned construction site');
+    await mutate('site_assign', { userId: ids.accountant, siteId: assignedSite.id });
+    await mutate('attendance_check_in', { siteId: assignedSite.id }, ids.accountant);
+    await mutate('site_assign', { userId: ids.sales, siteId: assignedSite.id });
+    await mutate('attendance_check_in', { siteId: assignedSite.id }, ids.sales);
+    await mutate('stock_location_move', { itemId: material.id, siteId: mainStore.id, type: 'OUT', quantity: '1' }, ids.accountant);
+    const ownExpense = await expense(ids.accountant);
+    const privateExpense = await expense(ids.sales);
+    const receipt = await reserve(ownExpense.id, ids.accountant);
+    await complete(receipt, ids.accountant);
+    await rejects(() => reserve(privateExpense.id, ids.accountant), 'PT404');
+    const own = await read(ids.accountant); const out = await exported(ids.accountant);
+    assert.equal(own.user.role, 'ACCOUNTANT');
+    assert.deepEqual(own.permissions, { admin: false, canWrite: true });
+    assert.equal(own.stockItems.find(row => row.id === material.id)?.quantityMilli, 19000);
+    assert.deepEqual(own.expenses.map(row => row.id), [ownExpense.id]);
+    assert.equal(own.expenseSummary, null);
+    assert.equal(own.attendance.length, 1);
+    assert.equal(own.attendance[0].userId, ids.accountant);
+    assert.ok(own.extension.attendanceCalendar.every(row => row.userId === ids.accountant));
+    assert.ok(own.extension.attendanceSummary.every(row => row.userId === ids.accountant));
+    assert.deepEqual(own.extension.expenseReceipts.map(row => row.expenseId), [ownExpense.id]);
+    assert.deepEqual([own.extension.paymentAccounts, own.extension.paymentInstallments, own.extension.customerPayments, own.extension.purchaseOrders], [null, null, null, null]);
+    assert.equal(JSON.stringify(out).includes(privateExpense.id), false);
+    assert.equal('audit' in out, false);
+    assert.equal('expenseSummary' in out, false);
+    for (const action of ['expense_review', 'attendance_correct', 'attendance_overtime_approve', 'payment_record', 'payment_void', 'site_assign', 'purchase_order_create']) {
+      await rejects(() => mutate(action, {}, ids.accountant), 'PT403');
+    }
+    await rejects(() => query('SELECT public.crm_team_activity_read($1::uuid,$2,null,$3,1) AS result', [ids.accountant, month, 'all']), 'PT403');
+    const admin = await read();
+    assert.equal(admin.expenses.length, 2);
+    assert.ok(admin.expenseSummary);
+    assert.equal(admin.attendance.length, 2);
   });
 
   test('assigned sites control employee check-in, forged site labels are ignored and snapshots survive reassignment', async () => {
@@ -358,7 +398,7 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     assert.equal(data.extension.paymentInstallments!.find(row => row.id === later.id)?.paidPaise, '200000');
     await mutate('payment_installment_cancel', { id: overdue.id, reason: 'Revised payment plan' });
     assert.equal((await read()).extension.paymentAccounts![0].unallocatedPaise, '200000');
-    for (const actor of [ids.manager, ids.sales, ids.operations, ids.viewer]) {
+    for (const actor of [ids.manager, ids.sales, ids.operations, ids.accountant, ids.viewer]) {
       const own = await read(actor); const out = await exported(actor);
       assert.deepEqual([own.extension.paymentAccounts, own.extension.paymentInstallments, own.extension.customerPayments], [null, null, null]);
       assert.equal(JSON.stringify(out).includes('PRIVATE-PAYMENT-REF'), false);
@@ -468,7 +508,7 @@ test('the additive migration allocates existing stock without changing totals or
     const used = await legacyMutation('stock_move', { itemId: stock.id, type: 'OUT', quantity: '7.5' }, opening.data.revision);
     assert.equal(used.data.stockItems[0].quantityMilli, 32500); assert.equal(used.data.stockMovements.length, 2);
     await legacy.exec('RESET ROLE');
-    await legacy.exec(await readFile(new URL(`../supabase/migrations/${migrations[2]}`, import.meta.url), 'utf8'));
+    for (const file of migrations.slice(2)) await legacy.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     await legacy.exec('SET ROLE service_role');
     const updated = (await legacy.query<{ result: OperationsData }>('SELECT public.crm_operations_v2_read($1::uuid,$2) AS result', [ids.owner, selectedMonth])).rows[0].result;
     const main = updated.extension.sites.find(row => row.system)!;

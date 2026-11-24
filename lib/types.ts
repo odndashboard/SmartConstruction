@@ -1,4 +1,4 @@
-export type Role = 'OWNER' | 'MANAGER' | 'SALES' | 'OPERATIONS' | 'VIEWER';
+export type Role = 'OWNER' | 'MANAGER' | 'SALES' | 'OPERATIONS' | 'ACCOUNTANT' | 'VIEWER';
 export type LeadStatus = 'NEW' | 'CONTACTED' | 'SITE_VISIT' | 'QUOTED' | 'NEGOTIATION' | 'WON' | 'LOST';
 export type QuoteStatus = 'DRAFT' | 'ISSUED' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'SUPERSEDED';
 export type WorkStatus = 'PLANNED' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED';
@@ -63,4 +63,4 @@ export const LEAD_STAGES: {value:LeadStatus;label:string}[] = [
   {value:'NEW',label:'New enquiry'}, {value:'CONTACTED',label:'Contacted'}, {value:'SITE_VISIT',label:'Site visit'},
   {value:'QUOTED',label:'Quoted'}, {value:'NEGOTIATION',label:'Negotiation'}, {value:'WON',label:'Won'}, {value:'LOST',label:'Lost'},
 ];
-export const ROLE_LABELS: Record<Role,string> = {OWNER:'Owner',MANAGER:'Manager',SALES:'Sales',OPERATIONS:'Operations',VIEWER:'Viewer'};
+export const ROLE_LABELS: Record<Role,string> = {OWNER:'Owner',MANAGER:'Manager',SALES:'Sales',OPERATIONS:'Operations',ACCOUNTANT:'Accountant',VIEWER:'Viewer'};
