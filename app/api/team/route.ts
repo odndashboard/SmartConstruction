@@ -8,7 +8,7 @@ import { accountSetupLink } from '@/lib/auth-policy';
 
 export const dynamic = 'force-dynamic';
 const schema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('add'), name: z.string().trim().min(1, 'Enter the employee name.').max(200), email: z.string().trim().email('Enter a valid email address.').max(254).transform(v => v.toLowerCase()), role: z.enum(['MANAGER', 'SALES', 'OPERATIONS', 'VIEWER']) }).strict(),
+  z.object({ action: z.literal('add'), name: z.string().trim().min(1, 'Enter the employee name.').max(200), email: z.string().trim().email('Enter a valid email address.').max(254).transform(v => v.toLowerCase()), role: z.enum(['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER']) }).strict(),
   z.object({ action: z.literal('access_link'), userId: z.string().uuid() }).strict(),
 ]);
 

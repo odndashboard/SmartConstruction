@@ -18,7 +18,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.').refine(v
   const d = new Date(`${v}T00:00:00Z`); return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
 }, 'Enter a valid calendar date.');
 const optionalDate = z.union([date, z.literal('')]).default('');
-const role = z.enum(['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'VIEWER']);
+const role = z.enum(['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER']);
 const leadStatus = z.enum(['NEW', 'CONTACTED', 'SITE_VISIT', 'QUOTED', 'NEGOTIATION', 'WON', 'LOST']);
 const workStatus = z.enum(['PLANNED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED']);
 const owner = blank(200);

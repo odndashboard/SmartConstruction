@@ -42,15 +42,18 @@ Missing configuration produces a setup-pending screen. It does not enable demo a
 
 | Role | Allowed changes |
 |---|---|
-| Owner | All CRM actions, company details, employee roles and access |
+| Owner / Admin | All CRM actions, lead status, company details, employee roles and access |
 | Manager | Sales, lead status, quotations, commercial approval, and work-order delivery |
 | Sales | Customer and lead details, follow-ups, draft quotations and revisions; lead status stays unchanged |
 | Operations | Follow-ups, existing work orders, and milestones |
+| Accountant | Read/export CRM records, stock entries, own attendance and own expenses with receipts |
 | Viewer | Read and export records; no changes |
 
-**Core CRM records and stock are shared with active members.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
+**Core CRM records and stock are shared with active members.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers and Accountants remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
 
-The standalone Customers tab is removed. Customer contact and billing details remain linked to leads, quotations and work orders. Add customer details inside the lead form, or edit them from an existing lead. Owners and Managers use **Change status** on a lead; Lost requires a reason, lost leads reopen as New enquiry, and Won is recorded through quotation acceptance. Sales can add New enquiries and edit their details. Lead-status permissions are enforced by the application server as well as the interface.
+The standalone Customers tab is removed. Customer contact and billing details remain linked to leads, quotations and work orders. Add customer details inside the lead form, or edit them from an existing lead. Owners and Managers use **Change status** on a lead; Lost requires a reason, lost leads reopen as New enquiry, and Won is recorded through quotation acceptance. Sales can add New enquiries and edit their details. Lead-status permissions are enforced by the application server, the interface and the database.
+
+To assign the Accountant role, an Owner opens **Settings → Team** and chooses **Accountant** beside an active employee, or chooses it when creating a new employee account. Adding this role does not change anyone's existing access automatically.
 
 An Owner can disable an employee immediately in **Settings → Team**. The server checks active membership on each request, so an existing authentication session cannot continue reading or changing CRM data after deactivation. Data already downloaded to a device cannot be recalled. At least one active Owner must remain, and users cannot disable themselves through the team controls.
 

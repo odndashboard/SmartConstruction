@@ -1,6 +1,6 @@
 # Sites, stock, attendance, expenses and customer payments
 
-These modules extend the existing Smart Construction CRM. They share the same employee accounts, mobile and desktop interface, and live website used by the Android application. The existing `OWNER` role is the administrator for these modules. A `MANAGER` is an employee for attendance and expense privacy.
+These modules extend the existing Smart Construction CRM. They share the same employee accounts, mobile and desktop interface, and live website used by the Android application. The existing `OWNER` role is the administrator for these modules. `MANAGER` and `ACCOUNTANT` roles are employees for attendance and expense privacy.
 
 ## Dashboard overview
 
@@ -18,7 +18,7 @@ Dashboard, Team activity and operations reads have a 15-second deadline, includi
 
 ## Access rules
 
-| Action | Owner/admin | Manager, Sales, Operations | Viewer |
+| Action | Owner/admin | Manager, Sales, Operations, Accountant | Viewer |
 | --- | --- | --- | --- |
 | View stock and its movement history | Yes | Yes | Yes |
 | Create a stock item; record stock in/out | Yes | Yes | No |
