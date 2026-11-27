@@ -51,7 +51,9 @@ Missing configuration produces a setup-pending screen. It does not enable demo a
 
 **Core CRM records and stock are shared with active members.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers and Accountants remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
 
-The standalone Customers tab is removed. Customer contact and billing details remain linked to leads, quotations and work orders. Add Lead creates the customer association from the lead contact or project title and phone; billing details can be edited from the lead. Owners and Managers use **Change status** or the lead form to mark a lead **Won**, including before a quotation exists. Lost requires a reason, lost leads reopen as New enquiry, and Won leads cannot be reopened. Marking a lead Won does not accept a quotation or create a work order; quotation acceptance still requires its separate approval and also marks the lead Won. Sales can add New enquiries and edit their details. Lead-status permissions are enforced by the application server, the interface and the database.
+Add Lead links a customer using the lead contact or project title and phone. Billing details can be edited from the lead. Sales can add New enquiries and edit their details. Owners and Managers can mark a lead **Won** from the lead form or **Change status**. Lost requires a reason and reopens as New enquiry. Won is final.
+
+Marking a lead **Won** creates a **Planned** work order using the lead's project details. Accepting a quotation marks its linked lead Won and creates a work order for its approved scope. If the lead already has a work order awaiting approval, the first accepted quotation attaches to that order and keeps its number, owner, dates and milestones. Each additional accepted quotation receives its own work order.
 
 To assign the Accountant role, an Owner opens **Settings → Team** and chooses **Accountant** beside an active employee, or chooses it when creating a new employee account. Adding this role does not change anyone's existing access automatically.
 
@@ -65,8 +67,9 @@ There is no public self-registration screen and no first-visitor-is-owner rule. 
 - Money is calculated using integer paise and exact intermediate arithmetic.
 - Real company registration, GSTIN, property location/state, and line-item tax information must be configured before issuing a real quotation. The app does not invent a company GSTIN or choose a universal construction GST rate.
 - Issuing freezes supplier/customer details and quote amounts. Editing issued commercial terms requires a new revision.
-- Customer acceptance records an acceptance note and marks the lead won.
-- An accepted quotation can produce only one work order; its approved commercial snapshot is retained.
+- Marking a lead Won automatically creates its Planned work order, including when the lead has no quotation. The work order shows project details and expected kW; approved totals remain blank until a quotation is accepted.
+- Customer acceptance records an acceptance note, marks the lead Won and automatically creates or links that quotation's work order with its approved snapshot.
+- Repeating the Won update or quotation conversion reuses the existing applicable order. An accepted quotation can produce only one work order; its approved commercial snapshot is retained. Every additional accepted quotation automatically receives a separate work order for its own scope without overwriting an earlier order.
 - Mutations use a workspace revision and request ID to reject stale edits and safely acknowledge retries.
 - Example data is optional, visibly labelled, and loaded only by an Owner's explicit action.
 - Owner JSON exports include the full available audit trail; employee exports omit private administrator activity and other employees' attendance/expenses. CSV cells are escaped against spreadsheet formula injection.

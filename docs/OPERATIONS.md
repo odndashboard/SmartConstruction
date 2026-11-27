@@ -99,7 +99,7 @@ The storage bucket is private, with no direct anon/authenticated read or write p
 
 ## Customer payments
 
-The **Payments** navigation tab is Owner-only, including API reads, writes, exports and activity history. Select a real work order; its frozen accepted quotation total determines the contract amount.
+The **Payments** navigation tab is Owner-only, including API reads, writes, exports and activity history. A work order from a Won lead appears in Payments once it has an accepted quotation. The frozen quotation total determines the contract amount.
 
 The Owner can add due-date instalments and record actual customer receipts with a date, method (cash, bank, UPI, cheque or other), reference and notes. The app tracks contract amount, scheduled amount, received, outstanding, overdue and unallocated advance. Payments are a record of money received outside the app; this module does not charge a customer or initiate a bank transfer.
 

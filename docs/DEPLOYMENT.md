@@ -81,7 +81,7 @@ Recommended starting roles: you as Owner, a trusted supervisor as Manager, enqui
 
 Use synthetic records for this check. Sign in as the Owner and as a separate employee in another browser profile. Verify that the employee can use only their role's actions, that they cannot change team access, and that disabling their membership immediately blocks the next API read/write. Verify sign-out and opening a fresh activation link on another device.
 
-Create a lead, complete a follow-up with an outcome, prepare a quotation with your verified GST configuration, accept it and convert it into one work order. Retry the conversion to confirm a second work order is not created. Confirm data is shared across two devices and survives refresh.
+Create a lead, complete a follow-up and mark the lead Won. Check that it appears once under Work orders as Planned. Record its order number, then issue and accept a quotation for the lead using your verified GST configuration. Check that the same order shows the approved amount and keeps its milestones. Confirm that repeating the save or refreshing on another device still shows a single order for that quotation.
 
 Test two overlapping edits and the stale-change conflict; do not assume a successful build proves hosted database behavior. Confirm the public production URL can reach the CRM login without requiring a Vercel login. Preview deployment protection is separate from employee authentication.
 

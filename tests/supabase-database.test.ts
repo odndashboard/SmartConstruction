@@ -104,6 +104,18 @@ async function mutate(action: string, payload: unknown, actor = ids.owner) {
   return commit(plan(await read(actor), action, payload));
 }
 
+async function issuedQuote(leadId: string, title = 'Accepted work scope') {
+  const data = await read();
+  const lead = data.leads.find(row => row.id === leadId)!;
+  const customer = data.customers.find(row => row.id === lead.customerId)!;
+  await mutate('company_save', { name: data.company.name, legalName: 'Test contractor', address: 'Actual supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: data.company.terms });
+  await mutate('customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, email: customer.email, address: 'Confirmed billing address', stateCode: '06', gstin: customer.gstin });
+  const saved = await mutate('quote_save', { leadId, title, validUntil: '2026-12-23', placeOfSupply: '06', siteAddress: 'Confirmed quote site', terms: 'Accepted terms',
+    items: [{ id: crypto.randomUUID(), description: title, hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }] });
+  const quote = saved.data.quotations.find(row => row.title === title)!;
+  return (await mutate('quote_issue', { id: quote.id })).data.quotations.find(row => row.id === quote.id)!;
+}
+
 describe('Supabase database authorization and atomic writes', { concurrency: false }, () => {
   before(async () => {
     db = new PGlite();
@@ -131,6 +143,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await db.exec(await readFile(new URL('../supabase/migrations/20261124072200_accountant_and_lead_status.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127062903_lead_expected_kw.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127065452_manual_lead_won.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261127072310_won_lead_workorders.sql', import.meta.url), 'utf8'));
   });
 
   beforeEach(async () => {
@@ -334,7 +347,12 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
       assert.equal(statusResult.data.leads.find(row => row.id === lead.id)?.status, 'WON');
       assert.equal(statusResult.data.leads.find(row => row.id === lead.id)?.expectedKw, 5.5);
       assert.deepEqual(statusResult.data.quotations, before.quotations);
-      assert.deepEqual(statusResult.data.workorders, before.workorders);
+      assert.equal(statusResult.data.workorders.length, before.workorders.length + 1);
+      const planned = statusResult.data.workorders.find(row => row.leadId === lead.id)!;
+      assert.equal(planned.status, 'PLANNED');
+      assert.equal(planned.quoteId, null);
+      assert.equal(planned.snapshot, null);
+      assert.equal(planned.expectedKw, 5.5);
       assert.equal(statusResult.data.quotations.find(row => row.id === quote.id)?.status, 'DRAFT');
       const saveLead = (await mutate('lead_save', { title: `Save Won ${actor}` }, actor)).data.leads.find(row => row.title === `Save Won ${actor}`)!;
       const saved = await mutate('lead_save', { id: saveLead.id, title: saveLead.title, status: 'WON' }, actor);
@@ -532,6 +550,115 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     assert.deepEqual(updated.data.quotations[0], snapshot);
   });
 
+  test('SQL completes an older server Won mutation atomically with numbered work and idempotent retries', async () => {
+    await bootstrap();
+    const before = await read();
+    const oldServer = plan(before, 'lead_save', { title: 'Old server Won lead', contact: 'Actual contact', expectedKw: '7.25', status: 'WON' });
+    oldServer.changes.upserts.workorders = [];
+    oldServer.changes.sequences = before.sequences;
+    oldServer.changes.audit = oldServer.changes.audit.filter(event => event.entityType !== 'workorder');
+    const first = await commit(oldServer);
+    const order = first.data.workorders[0];
+    assert.equal(first.data.leads.length, 1);
+    assert.equal(order.leadId, first.data.leads[0].id);
+    assert.equal(order.expectedKw, 7.25);
+    assert.equal(order.quoteId, null);
+    assert.equal(order.snapshot, null);
+    assert.equal(order.status, 'PLANNED');
+    assert.equal(order.number, 'SC/WO/2026-27/000001');
+    assert.equal(first.data.sequences['WO/2026-27'], 1);
+    assert.equal(first.data.revision, before.revision + 1);
+    const retry = await commit(oldServer);
+    assert.equal(retry.data.workorders.length, 1);
+    assert.equal(retry.data.revision, first.data.revision);
+    const repeated = await mutate('lead_status', { id: first.data.leads[0].id, status: 'WON' });
+    assert.deepEqual(repeated.data.workorders, first.data.workorders);
+    assert.deepEqual(repeated.data.sequences, first.data.sequences);
+    const stale = plan(before, 'lead_save', { title: 'Concurrent old snapshot', status: 'WON' });
+    await rejectsSql(() => commit(stale), 'PT409');
+    assert.equal((await read()).workorders.length, 1);
+  });
+
+  test('SQL validates automatic work numbers, actual lead details and current role before saving any rows', async () => {
+    await bootstrap(); await addMember(ids.sales, 'sales', 'SALES');
+    const before = await read();
+    const number = plan(before, 'lead_save', { title: 'Numbered Won', status: 'WON' });
+    (number.changes.upserts.workorders[0] as Record<string, unknown>).number = 'SC/WO/2026-27/999999';
+    await rejectsSql(() => commit(number), 'PT400');
+    const missing = plan(before, 'lead_save', { title: 'Missing numbered work', status: 'WON' });
+    missing.changes.upserts.workorders = [];
+    await rejectsSql(() => commit(missing), 'PT400');
+    const fabricated = plan(before, 'lead_save', { title: 'Actual Won', status: 'WON', expectedKw: '3.5' });
+    (fabricated.changes.upserts.workorders[0] as Record<string, unknown>).expectedKw = 99;
+    await rejectsSql(() => commit(fabricated), 'PT400');
+    const unauthorized = plan(before, 'lead_save', { title: 'Unauthorized Won', status: 'WON' });
+    await rejectsSql(() => commit({ ...unauthorized, actor: ids.sales }), 'PT403');
+    assert.deepEqual(await read(), before);
+    const saved = await mutate('lead_save', { title: 'Approved Won', status: 'WON' });
+    const lead = saved.data.leads[0]; const order = saved.data.workorders[0];
+    for (const action of ['lead_save', 'lead_status', 'quote_accept', 'quote_convert']) {
+      const changes = emptyChanges(saved.data);
+      changes.upserts.workorders = [{ ...order, status: 'ACTIVE' }];
+      await rejectsSql(() => commit({ actor: ids.owner, expectedRevision: saved.data.revision, requestId: crypto.randomUUID(), action, payloadHash: hash, changes, message: 'Forged delivery edit' }), 'PT403');
+    }
+    const salesChanges = emptyChanges(saved.data); salesChanges.upserts.workorders = [{ ...order, status: 'ACTIVE' }];
+    await rejectsSql(() => commit({ actor: ids.sales, expectedRevision: saved.data.revision, requestId: crypto.randomUUID(), action: 'lead_save', payloadHash: hash, changes: salesChanges, message: 'Forged Sales order edit' }), 'PT403');
+    const edited = await mutate('lead_save', { id: lead.id, title: 'Sales detail update' }, ids.sales);
+    assert.deepEqual(edited.data.workorders, saved.data.workorders);
+  });
+
+  test('accepted quotation links the same unpriced order after delivery completion without reopening it', async () => {
+    await bootstrap();
+    for (const closedStatus of ['COMPLETED', 'CANCELLED']) {
+      const created = await mutate('lead_save', { title: `Closed planning ${closedStatus}`, status: 'WON', expectedKw: '9.5' });
+      const lead = created.data.leads.find(row => row.title === `Closed planning ${closedStatus}`)!;
+      const order = created.data.workorders.find(row => row.leadId === lead.id)!;
+      const quote = await issuedQuote(lead.id, `Closed agreed scope ${closedStatus}`);
+      if (closedStatus === 'COMPLETED') await mutate('workorder_save', { id: order.id, owner: '', startDate: '2026-11-22', endDate: '2026-11-23', status: 'ACTIVE' });
+      await mutate('workorder_save', { id: order.id, owner: '', startDate: '2026-11-22', endDate: '2026-11-23', status: closedStatus });
+      const before = await read();
+      const closed = before.workorders.find(row => row.id === order.id)!;
+      const oldServer = plan(before, 'quote_accept', { id: quote.id, acceptanceNote: 'Actual written agreement' });
+      oldServer.changes.upserts.workorders = []; // SQL must still complete the link.
+      const accepted = await commit(oldServer);
+      const linked = accepted.data.workorders.find(row => row.id === order.id)!;
+      assert.equal(linked.quoteId, quote.id);
+      assert.equal(linked.status, closedStatus);
+      assert.deepEqual(linked.snapshot, accepted.data.quotations.find(row => row.id === quote.id));
+      for (const key of ['id', 'number', 'leadId', 'owner', 'startDate', 'endDate', 'milestones', 'expectedKw', 'createdAt', 'automaticForLead'] as const) assert.deepEqual(linked[key], closed[key]);
+      assert.equal(accepted.data.workorders.filter(row => row.leadId === lead.id).length, 1);
+      assert.equal(accepted.data.sequences['WO/2026-27'], before.sequences['WO/2026-27']);
+    }
+  });
+
+  test('every accepted quotation gets one order even when its lead was already Won and the older server omits work', async () => {
+    await bootstrap();
+    const lead = (await mutate('lead_save', { title: 'One lead with multiple agreed scopes', expectedKw: '4.25' })).data.leads[0];
+    const firstQuote = await issuedQuote(lead.id, 'First accepted scope');
+    const firstAccepted = await mutate('quote_accept', { id: firstQuote.id, acceptanceNote: 'First actual acceptance' });
+    const firstOrder = firstAccepted.data.workorders.find(row => row.quoteId === firstQuote.id)!;
+    assert.ok(firstOrder); assert.equal(firstOrder.automaticForLead, true);
+    const secondQuote = await issuedQuote(lead.id, 'Second accepted scope');
+    const before = await read();
+    const oldServer = plan(before, 'quote_accept', { id: secondQuote.id, acceptanceNote: 'Second actual acceptance' });
+    oldServer.changes.upserts.workorders = []; oldServer.changes.sequences = before.sequences;
+    oldServer.changes.upserts.leads = []; // Already-Won lead can have no row diff.
+    oldServer.changes.audit = oldServer.changes.audit.filter(event => event.entityType !== 'workorder');
+    const accepted = await commit(oldServer);
+    assert.equal(accepted.data.leads.length, 1);
+    assert.equal(accepted.data.leads[0].status, 'WON');
+    assert.equal(accepted.data.workorders.length, 2);
+    assert.deepEqual(accepted.data.workorders.find(row => row.id === firstOrder.id), firstOrder);
+    const secondOrder = accepted.data.workorders.find(row => row.quoteId === secondQuote.id)!;
+    assert.equal(secondOrder.automaticForLead, false);
+    assert.equal(secondOrder.status, 'PLANNED');
+    assert.deepEqual(secondOrder.snapshot, accepted.data.quotations.find(row => row.id === secondQuote.id));
+    assert.equal(accepted.data.sequences['WO/2026-27'], 2);
+    assert.equal((await commit(oldServer)).data.workorders.length, 2);
+    assert.equal((await mutate('quote_convert', { id: secondQuote.id })).data.workorders.length, 2);
+    assert.equal((await mutate('lead_status', { id: lead.id, status: 'WON' })).data.workorders.length, 2);
+  });
+
   test('a receipt cannot be reused for a different payload, action, or actor', async () => {
     await bootstrap();
     await addMember(ids.manager, 'manager', 'MANAGER');
@@ -657,6 +784,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     const initial = await read();
     const accepted = initial.quotations.find(quote => quote.id === quoteId)!;
     assert.equal(accepted.status, 'ACCEPTED');
+    assert.equal(initial.workorders.filter(row => row.quoteId === accepted.id).length, 1, 'Acceptance automatically creates delivery work');
     const input = plan(initial, 'quote_convert', { id: accepted.id });
     const first = await commit(input);
     const retry = await commit(input);
@@ -664,7 +792,8 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     assert.equal(retry.data.workorders.filter(order => order.quoteId === accepted.id).length, 1);
     const order = first.data.workorders.find(item => item.quoteId === accepted.id)!;
     assert.deepEqual(order.snapshot, accepted);
-    assert.ok(order.snapshot); assert.equal(order.snapshot.totals.total, accepted.totals.total);
+    assert.ok(order.snapshot);
+    assert.equal(order.snapshot.totals.total, accepted.totals.total);
     assert.equal(order.snapshot.totals.total, 1_180_000);
 
     const duplicateChanges = emptyChanges(first.data);

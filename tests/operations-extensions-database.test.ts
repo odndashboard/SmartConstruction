@@ -16,7 +16,7 @@ const ids = {
   anonymous: '20000000-0000-4000-8000-000000000009', banned: '20000000-0000-4000-8000-000000000010',
   accountant: '20000000-0000-4000-8000-000000000011',
 };
-const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql'];
+const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql', '20261127072310_won_lead_workorders.sql'];
 let db: PGlite;
 let today: string;
 let month: string;
@@ -377,6 +377,29 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     await role('postgres'); await db.exec('UPDATE crm.operations_state SET purchase_sequence=999999 WHERE id=1'); await role('service_role');
     const expanded = (await mutate('purchase_order_create', { supplier: 'Expanded numbering', siteId: a.id, lines: [{ itemId: first.id, quantity: '1' }] })).data.extension.purchaseOrders!.find(row => row.supplier === 'Expanded numbering')!;
     assert.equal(expanded.number, 'SC/PO/1000000');
+  });
+
+  test('unpriced Won work stays out of payment accounts and rejects payments until a real quote is accepted', async () => {
+    const created = await core('lead_save', { title: 'Unpriced planned project', status: 'WON', expectedKw: '6.75', stateCode: '06' });
+    const lead = created.data.leads[0]; const planned = created.data.workorders[0];
+    assert.equal(planned.snapshot, null);
+    assert.deepEqual((await read()).extension.paymentAccounts, []);
+    await rejects(() => mutate('payment_record', { workOrderId: planned.id, paymentDate: today, amount: '1', method: 'CASH' }), 'PT409');
+    await rejects(() => mutate('payment_installment_add', { workOrderId: planned.id, title: 'Unagreed amount', dueDate: today, amount: '1' }), 'PT409');
+    assert.deepEqual((await read()).extension.customerPayments, []);
+    const customer = created.data.customers.find(row => row.id === lead.customerId)!;
+    await core('customer_save', { id: customer.id, name: customer.name, address: 'Confirmed billing address', stateCode: '06' });
+    await core('company_save', { name: 'Smart construction', legalName: 'Test contractor', address: 'Supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: '' });
+    const quote = (await core('quote_save', { leadId: lead.id, title: 'Genuine agreed scope', validUntil: day(30), placeOfSupply: '06', siteAddress: 'Confirmed site', terms: '',
+      items: [{ id: crypto.randomUUID(), description: 'Actual agreed scope', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }] })).data.quotations[0];
+    await core('quote_issue', { id: quote.id });
+    const accepted = await core('quote_accept', { id: quote.id, acceptanceNote: 'Actual acceptance' });
+    assert.equal(accepted.data.workorders.length, 1); assert.equal(accepted.data.workorders[0].id, planned.id);
+    const accounts = (await read()).extension.paymentAccounts!;
+    assert.equal(accounts.length, 1); assert.equal(accounts[0].workOrderId, planned.id); assert.equal(accounts[0].contractPaise, '1180000');
+    await mutate('payment_record', { workOrderId: planned.id, paymentDate: today, amount: '1', method: 'CASH' });
+    assert.equal((await read()).extension.paymentAccounts![0].receivedPaise, '100');
+    assert.equal((await read(ids.accountant)).extension.paymentAccounts, null);
   });
 
   test('payments allocate FIFO with exact Owner-only totals, advances, cancellations and immutable void history', async () => {

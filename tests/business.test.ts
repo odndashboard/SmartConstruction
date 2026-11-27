@@ -198,21 +198,25 @@ describe('server-side authorization and input boundaries', () => {
 });
 
 describe('commercial document workflow', () => {
-  test('manually marking a lead Won preserves quotations and still requires acceptance before work-order conversion', () => {
+  test('manual Won creates an unpriced work order and preserves quotation approval requirements', () => {
     for (const role of ['OWNER', 'MANAGER'] as Role[]) {
       for (const action of ['lead_status', 'lead_save']) {
         const data = workspace(); const quote = issuedQuote(data);
         const lead = data.leads.find(row => row.id === quote.leadId)!;
-        const documents = structuredClone({ quotations: data.quotations, workorders: data.workorders, sequences: data.sequences });
+        const quotations = structuredClone(data.quotations);
         setRole(data, role);
         act(data, action, { id: lead.id, ...(action === 'lead_save' ? { title: lead.title } : {}), status: 'WON' });
         assert.equal(lead.status, 'WON');
-        assert.deepEqual({ quotations: data.quotations, workorders: data.workorders, sequences: data.sequences }, documents);
+        assert.deepEqual(data.quotations, quotations);
+        assert.equal(data.workorders.length, 1);
+        const provisional = data.workorders[0];
+        assert.equal(provisional.status, 'PLANNED'); assert.equal(provisional.quoteId, null); assert.equal(provisional.snapshot, null);
         assert.throws(() => act(data, 'quote_convert', { id: quote.id }), /Accept the quotation/);
         assert.throws(() => act(data, 'quote_accept', { id: quote.id, acceptanceNote: '' }), CRMError);
         act(data, 'quote_accept', { id: quote.id, acceptanceNote: 'Written confirmation of the quotation.' });
         act(data, 'quote_convert', { id: quote.id });
         assert.equal(quote.status, 'ACCEPTED'); assert.equal(lead.status, 'WON');
+        assert.equal(data.workorders.length, 1); assert.equal(data.workorders[0].id, provisional.id);
         assert.deepEqual(data.workorders[0].snapshot, quote);
       }
     }
@@ -225,7 +229,7 @@ describe('commercial document workflow', () => {
     act(data, 'quote_issue', { id: quote.id });
     assert.equal(lead.status, 'WON'); assert.equal(quote.status, 'ISSUED');
     assert.equal(quote.acceptanceNote, ''); assert.equal(quote.acceptedAt, undefined);
-    assert.deepEqual(data.workorders, []);
+    assert.equal(data.workorders.length, 1); assert.equal(data.workorders[0].snapshot, null);
   });
 
   test('incomplete registration allows an explicitly unpriced draft but prevents issue', () => {
@@ -308,10 +312,10 @@ describe('commercial document workflow', () => {
     assert.deepEqual(data.sequences, counters);
     assert.deepEqual(order.snapshot, quote);
     assert.notEqual(order.snapshot, quote);
-    assert.ok(order.snapshot); assert.notEqual(order.snapshot.items, quote.items);
+    assert.notEqual(order.snapshot!.items, quote.items);
     act(data, 'customer_save', { id: quote.customer!.id, name: 'Later master edit', address: 'New address' });
     assert.equal(order.customerName, 'Synthetic Customer');
-    assert.equal(order.snapshot.totals.total, 106200);
+    assert.equal(order.snapshot!.totals.total, 106200);
     assert.equal(order.number, 'SC/WO/2026-27/000001');
   });
 

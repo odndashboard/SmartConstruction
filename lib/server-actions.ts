@@ -126,6 +126,41 @@ function quoteInputs(quote: Quotation): QuoteItemInput[] {
   return quote.items.map(({ id, description, hsnSac, quantity, unit, unitPrice, discount, gstRate }) => ({ id, description, hsnSac, quantity, unit, unitPrice, discount, gstRate }));
 }
 
+/** A won enquiry can start delivery planning without implying a priced or
+ * accepted contract. Later acceptance attaches the genuine commercial snapshot
+ * to that same order, preserving its number and all delivery progress. */
+function ensureWonWorkOrder(data: WorkspaceData, lead: Lead, action: string, now: Date, acceptedQuote?: Quotation): WorkOrder {
+  assert(lead.status === 'WON', 'Only a won lead can create a work order.');
+  const stamp = now.toISOString();
+  const quote = acceptedQuote ?? data.quotations.filter(row => row.leadId === lead.id && row.status === 'ACCEPTED')
+    .sort((a, b) => (a.acceptedAt ?? '').localeCompare(b.acceptedAt ?? '') || a.id.localeCompare(b.id))[0];
+  const belongsToLead = (order: WorkOrder) => (order.leadId ?? order.snapshot?.leadId) === lead.id;
+  const exact = quote ? data.workorders.find(order => order.quoteId === quote.id) : undefined;
+  if (exact) return exact;
+  const linkedOrder = data.workorders.find(belongsToLead);
+  const unpriced = data.workorders.find(order => belongsToLead(order) && !order.quoteId && !order.snapshot);
+  const existing = unpriced ?? (acceptedQuote ? undefined : linkedOrder);
+  if (existing) {
+    if (quote && !existing.quoteId && !existing.snapshot) {
+      assert(quote.status === 'ACCEPTED' && quote.leadId === lead.id, 'An accepted quotation for this lead is required.');
+      Object.assign(existing, { quoteId: quote.id, snapshot: clone(quote), title: quote.title,
+        customerName: quote.customer?.name ?? existing.customerName, siteAddress: quote.siteAddress, updatedAt: stamp });
+      audit(data, action, 'workorder', existing.id, `Linked accepted quotation ${quote.number} to work order ${existing.number}`, stamp);
+    }
+    return existing;
+  }
+  const customer = get(data.customers, lead.customerId, 'Customer');
+  const record: WorkOrder = { id: crypto.randomUUID(), leadId: lead.id, quoteId: quote?.id ?? null,
+    number: nextNumber(data, 'WO', now), title: quote?.title ?? lead.title,
+    customerName: quote?.customer?.name ?? customer.name, siteAddress: quote?.siteAddress ?? lead.siteAddress,
+    owner: lead.owner, startDate: '', endDate: '', status: 'PLANNED', snapshot: quote ? clone(quote) : null,
+    expectedKw: lead.expectedKw ?? null, automaticForLead: action !== 'quote_convert' && !linkedOrder,
+    milestones: [], isDemo: lead.isDemo, createdAt: stamp, updatedAt: stamp };
+  data.workorders.push(record);
+  audit(data, action, 'workorder', record.id, `Created planned work order ${record.number}${quote ? ` from accepted quotation ${quote.number}` : ' for won lead'}`, stamp);
+  return record;
+}
+
 export function assertActionRole(data: WorkspaceData, action: string): void {
   if (!Object.hasOwn(schemas, action)) throw new CRMError('Unknown workspace action.');
   if (!data.user.active || !permission[action]?.includes(data.user.role)) throw new CRMError('Your role does not permit this action.', 403);
@@ -173,6 +208,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
         createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
       if (!customerId) data.customers.push(customer);
       if (existing) Object.assign(existing, record); else data.leads.push(record);
+      if (record.status === 'WON' && APPROVE.includes(data.user.role)) ensureWonWorkOrder(data, existing ?? record, action, now);
       audit(data, action, 'lead', record.id, `${existing ? 'Updated' : 'Added'} lead ${record.title}`, stamp);
       return 'Lead saved.';
     }
@@ -180,6 +216,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       const lead = get(data.leads, p.id, 'Lead');
       checkLeadTransition(lead, p.status, p.lostReason || lead.lostReason);
       lead.status = p.status; lead.lostReason = p.status === 'LOST' ? p.lostReason || lead.lostReason : ''; lead.updatedAt = stamp;
+      if (lead.status === 'WON') ensureWonWorkOrder(data, lead, action, now);
       audit(data, action, 'lead', lead.id, `Lead moved to ${lead.status.toLowerCase().replaceAll('_', ' ')}`, stamp);
       return 'Lead status updated.';
     }
@@ -247,8 +284,9 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       assert(lead.status !== 'LOST', 'Reopen the lost lead before recording acceptance.');
       quote.status = 'ACCEPTED'; quote.acceptanceNote = p.acceptanceNote; quote.acceptedAt = stamp; quote.updatedAt = stamp;
       lead.status = 'WON'; lead.lostReason = ''; lead.updatedAt = stamp;
+      const order = ensureWonWorkOrder(data, lead, action, now, quote);
       audit(data, action, 'quotation', quote.id, `Recorded customer acceptance for ${quote.number}`, stamp);
-      return 'Quotation accepted and lead marked won.';
+      return `Quotation accepted, lead marked won and work order ${order.number} ready.`;
     }
     case 'quote_decline': {
       const quote = get(data.quotations, p.id, 'Quotation');
@@ -277,11 +315,9 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       assert(quote.status === 'ACCEPTED', 'Accept the quotation before creating a work order.');
       const existing = data.workorders.find(order => order.quoteId === quote.id);
       if (existing) return `Work order ${existing.number} already exists.`;
-      const record: WorkOrder = { id: crypto.randomUUID(), quoteId: quote.id, number: nextNumber(data, 'WO', now),
-        title: quote.title, customerName: quote.customer?.name ?? '', siteAddress: quote.siteAddress, owner: '', startDate: '', endDate: '',
-        status: 'PLANNED', snapshot: clone(quote), milestones: [], isDemo: quote.isDemo, createdAt: stamp, updatedAt: stamp };
-      data.workorders.push(record); audit(data, action, 'workorder', record.id, `Created work order ${record.number}`, stamp);
-      return `Work order ${record.number} created.`;
+      const lead = get(data.leads, quote.leadId, 'Lead');
+      const record = ensureWonWorkOrder(data, lead, action, now, quote);
+      return `Work order ${record.number} ready.`;
     }
     case 'workorder_save': {
       const order = get(data.workorders, p.id, 'Work order'); assertOpenOrder(order); checkOwner(data, p.owner);
@@ -350,6 +386,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       let grew = true;
       while (grew) { grew = false; for (const quote of data.quotations) if (keepQuotes.has(quote.id) && quote.revisionOf && !keepQuotes.has(quote.revisionOf)) { keepQuotes.add(quote.revisionOf); grew = true; } }
       const keepLeads = new Set(data.leads.filter(l => !l.isDemo).map(l => l.id));
+      for (const order of data.workorders.filter(o => !o.isDemo && o.leadId)) keepLeads.add(order.leadId!);
       for (const followup of data.followups.filter(f => !f.isDemo)) keepLeads.add(followup.leadId);
       for (const quote of data.quotations.filter(q => keepQuotes.has(q.id))) keepLeads.add(quote.leadId);
       const keepCustomers = new Set(data.customers.filter(c => !c.isDemo).map(c => c.id));

@@ -39,8 +39,9 @@ Business actions: `customer_save`, `lead_save`, `lead_status`, `followup_save`, 
 - Retain exact paise arithmetic and safe-integer limits.
 - Never substitute a universal GST rate or an invented registration.
 - Issued quotations freeze the commercial parties, scope, rates and amounts.
-- One accepted quotation produces at most one work order.
-- Work orders retain the accepted quotation snapshot.
+- Accepting a quotation marks its existing lead Won and links exactly one work order to that quotation.
+- Marking a lead Won creates one planned work order for that lead. Repeated saves reuse it.
+- A work order can be planned before a quote is accepted. Payment tracking starts when the order has an accepted quotation snapshot, which freezes the agreed amount.
 - Business record IDs, document numbers and historical snapshots must survive any explicit data migration.
 
 ## Deployment

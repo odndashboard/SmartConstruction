@@ -81,7 +81,10 @@ test('Owner and Manager can mark eligible leads Won without quotations through e
         applyAction(data, action, { id: lead.id, ...(action === 'lead_save' ? { title: lead.title } : {}), status: 'WON' }, now);
         assert.equal(lead.status, 'WON'); assert.equal(lead.lostReason, '');
         assert.deepEqual(data.customers, customers);
-        assert.deepEqual(data.quotations, []); assert.deepEqual(data.workorders, []); assert.deepEqual(data.sequences, {});
+        assert.deepEqual(data.quotations, []); assert.equal(data.workorders.length, 1);
+        assert.equal(data.workorders[0].leadId, lead.id); assert.equal(data.workorders[0].status, 'PLANNED');
+        assert.equal(data.workorders[0].snapshot, null); assert.equal(data.workorders[0].quoteId, null);
+        assert.deepEqual(data.sequences, { 'WO/2026-27': 1 });
         assert.equal(data.activity[0].action, action);
         assert.equal(data.activity[0].entityId, lead.id);
       }
@@ -96,7 +99,10 @@ test('Owner and Manager can create Won leads with automatic customer association
     const lead = data.leads.at(-1)!;
     assert.equal(lead.status, 'WON'); assert.equal(lead.expectedKw, 8.5); assert.equal(lead.email, '');
     assert.equal(data.customers.find(customer => customer.id === lead.customerId)!.name, 'Actual contact');
-    assert.deepEqual(data.quotations, []); assert.deepEqual(data.workorders, []); assert.deepEqual(data.sequences, {});
+    assert.deepEqual(data.quotations, []); assert.equal(data.workorders.length, 1);
+    assert.equal(data.workorders[0].leadId, lead.id); assert.equal(data.workorders[0].expectedKw, 8.5);
+    assert.equal(data.workorders[0].snapshot, null); assert.equal(data.workorders[0].quoteId, null);
+    assert.deepEqual(data.sequences, { 'WO/2026-27': 1 });
   }
 });
 
