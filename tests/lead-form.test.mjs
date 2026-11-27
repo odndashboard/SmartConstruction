@@ -10,7 +10,7 @@ import ts from 'typescript';
 // The field components remain real; unrelated icons and formatting are simple stand-ins.
 const source = readFileSync(new URL('../components/CRMApp.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('CRMApp.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ['LeadForm', 'LeadStatusForm', 'SimpleForm', 'Field', 'MemberOptions', 'assigneeValue', 'expectedKwInputValue', 'workOrderLeadId', 'LeadTable', 'LeadBoard', 'LeadDetail', 'DetailField', 'indexLeadCustomers', 'indexLeadOwners', 'useLeadViewLookup', 'groupLeadStages'];
+const names = ['QuickLeadForm', 'LeadForm', 'LeadStatusForm', 'SimpleForm', 'Field', 'MemberOptions', 'assigneeValue', 'expectedKwInputValue', 'workOrderLeadId', 'LeadTable', 'LeadBoard', 'LeadDetail', 'DetailField', 'indexLeadCustomers', 'indexLeadOwners', 'useLeadViewLookup', 'groupLeadStages'];
 const declarations = names.map(name => {
   const node = ast.statements.find(item => ts.isFunctionDeclaration(item) && item.name?.text === name);
   assert.ok(node, `Missing component ${name}`);
@@ -151,4 +151,23 @@ test('Change Status offers Won while preserving closed lead rules', () => {
   const won = render({ ...baseLead, status: 'WON' });
   assert.doesNotMatch(won, /name="status"|linked to the accepted quotation/);
   assert.match(won, /Won leads cannot be reopened/);
+});
+
+test('Simple mode creates a lead with only its name required, using the signed-in staff member', async () => {
+  const saved = [];
+  const tree = components.QuickLeadForm({ owner: member.userId, busy: false, close() {}, mutate: async (action, payload) => saved.push({ action, payload }) });
+  const inputs = fields(tree).filter(node => node.type === 'input');
+  assert.deepEqual(inputs.map(node => node.props.name), ['title', 'contact', 'phone', 'expectedKw']);
+  assert.deepEqual(inputs.filter(node => node.props.required).map(node => node.props.name), ['title']);
+  await tree.props.onSubmit({ title: 'Rooftop', contact: '', phone: '', expectedKw: '2.75' });
+  assert.deepEqual(saved, [{ action: 'lead_save', payload: { title: 'Rooftop', contact: '', phone: '', expectedKw: '2.75', owner: member.userId } }]);
+});
+
+test('Simple mode names approval and rejection while preserving the stored lead stages', () => {
+  const html = renderToStaticMarkup(React.createElement(components.LeadStatusForm, {
+    lead: baseLead, busy: false, close() {}, mutate: async () => undefined, open() {}, simple: true,
+  }));
+  assert.match(html, /value="WON">Approved \(Won\)/);
+  assert.match(html, /value="LOST">Not approved \(Lost\)/);
+  assert.match(html, /value="NEW"/);
 });

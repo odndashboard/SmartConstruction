@@ -48,7 +48,7 @@ new Function('require', 'exports', ...Object.keys(helpers), compiled)(createRequ
 const quote = { id: 'quote-test', leadId: 'lead-test', number: 'Q/2026/001', title: 'Solar project', revision: 1,
   status: 'ISSUED', validUntil: '2026-12-20', totals: { total: 10000, mode: 'CGST_SGST', needsConfig: false }, items: REQUIRED_QUOTE_CATEGORIES.map((category, index) => ({ id: `item-${index}`, category, description: `Reviewed ${category} scope`, quantity: '1', unit: 'job', unitPrice: '0', discount: '0', gstRate: '0' })), siteAddress: 'Site', placeOfSupply: '06', terms: '' };
 function workspace(role = 'OWNER') {
-  return { user: { role }, customers: [{ id: 'customer-test', name: 'Customer', address: 'Actual test billing address' }],
+  return { user: { role }, company: { legalName: 'Actual company', address: 'Actual registered address' }, customers: [{ id: 'customer-test', name: 'Customer', address: 'Actual test billing address' }],
     leads: [{ id: quote.leadId, customerId: 'customer-test', status: 'WON' }], quotations: [quote],
     workorders: [{ id: 'work-test', quoteId: quote.id, leadId: quote.leadId }] };
 }
@@ -191,4 +191,17 @@ test('Accepted is final and both its Won lead and work order remain reachable', 
   assert.deepEqual(opened, [{ type: 'lead_detail', id: quote.leadId }, { type: 'work_detail', id: 'work-test' }]);
   const detail = views.QuoteDetail({ quote: accepted, data, permissions: { approve: true }, open() {}, busy: false, mutate() {}, print() {} });
   assert.ok(button(detail, 'View won lead')); assert.ok(button(detail, 'Open work order')); assert.ok(button(detail, 'View status'));
+});
+
+test('draft issue explains missing site and company details and keeps issue disabled until they are supplied', async () => {
+  reset(); const draft = { ...quote, status: 'DRAFT', siteAddress: '' }, data = workspace();
+  data.company = { legalName: '', address: '' };
+  const opened = [], saved = [];
+  let tree = renderForm(draft, data, { open: value => opened.push(value), mutate: async (...args) => saved.push(args) });
+  field(tree, 'status').props.onChange({ target: { value: 'ISSUED' } });
+  tree = renderForm(draft, data, { open: value => opened.push(value), mutate: async (...args) => saved.push(args) });
+  const html = renderToStaticMarkup(tree);
+  assert.match(html, /Project site address needed/); assert.match(html, /Owner.*genuine legal company name.*Advanced.*Settings/);
+  button(tree, 'Edit draft').props.onClick(); assert.deepEqual(opened, [{ type: 'quote', id: quote.id }]);
+  await submit(tree); assert.deepEqual(saved, []);
 });

@@ -49,7 +49,7 @@ const schemas: Record<string, z.ZodType<any>> = {
     location: blank(), siteAddress: blank(2000), stateCode: state, value: text(30).default('0'), status: leadStatus.optional(),
     source: blank(100), owner, priority: z.enum(['High', 'Medium', 'Low']).default('Medium'), notes: blank(10000) }).strict(),
   lead_status: z.object({ id, status: leadStatus, lostReason: blank(3000) }).strict(),
-  followup_save: z.object({ id: id.optional(), leadId: id, title: required(), dueAt: z.string().datetime({ offset: true }),
+  followup_save: z.object({ id: id.optional(), leadId: id, quoteId: id.nullable().optional(), title: required(), dueAt: z.string().datetime({ offset: true }),
     channel: z.enum(['Call', 'WhatsApp', 'Email', 'Site visit', 'Other']), owner, notes: blank(5000) }).strict(),
   followup_complete: z.object({ id, outcome: required(5000) }).strict(),
   followup_cancel: identity,
@@ -236,7 +236,12 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       const existing = p.id ? get(data.followups, p.id, 'Follow-up') : undefined;
       checkOwner(data, p.owner);
       if (existing) { assert(existing.status === 'OPEN', 'Only open follow-ups can be edited.'); assert(existing.isDemo === lead.isDemo, 'Example and real records cannot be mixed.'); }
-      const record = { ...p, id: existing?.id ?? crypto.randomUUID(), dueAt: new Date(p.dueAt).toISOString(), status: 'OPEN' as const,
+      const quoteId = p.quoteId === undefined ? existing?.quoteId : p.quoteId;
+      if (quoteId != null) {
+        const quote = get(data.quotations, quoteId, 'Quotation');
+        assert(quote.leadId === lead.id && quote.isDemo === lead.isDemo, 'Choose a quotation for this follow-up lead.');
+      }
+      const record = { ...p, ...(quoteId === undefined ? {} : { quoteId }), id: existing?.id ?? crypto.randomUUID(), dueAt: new Date(p.dueAt).toISOString(), status: 'OPEN' as const,
         outcome: '', isDemo: lead.isDemo, createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
       if (existing) Object.assign(existing, record); else data.followups.push(record);
       audit(data, action, 'followup', record.id, `${existing ? 'Rescheduled' : 'Added'} follow-up ${record.title}`, stamp);

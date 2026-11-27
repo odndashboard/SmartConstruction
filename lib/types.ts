@@ -26,6 +26,8 @@ export interface Lead {
 }
 export interface FollowUp {
   id: string; leadId: string; title: string; dueAt: string; channel: 'Call'|'WhatsApp'|'Email'|'Site visit'|'Other';
+  /** Genuine same-lead quotation for this reminder; historical reminders may omit it. */
+  quoteId?: string | null;
   owner: string; notes: string; status: 'OPEN'|'DONE'|'CANCELLED'; outcome: string;
   completedAt?: string; isDemo: boolean; createdAt: string; updatedAt: string;
 }

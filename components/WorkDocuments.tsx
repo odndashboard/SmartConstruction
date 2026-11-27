@@ -11,16 +11,17 @@ interface Props {
   editable: boolean;
   busy: boolean;
   statusAction?: ReactNode;
+  standalone?: boolean;
   onChange: (document: WorkDocumentKey, status: DocumentStatus) => void;
 }
 
-export default function WorkDocuments({ item, editable, busy, onChange, statusAction }: Props) {
+export default function WorkDocuments({ item, editable, busy, onChange, statusAction, standalone = false }: Props) {
   const [expanded, setExpanded] = useState(false);
   const panelId = useId();
   return <>
-    <div className={styles.actions}><button type="button" className="button button-secondary button-small" aria-expanded={expanded} aria-controls={panelId}
-      onClick={() => setExpanded(!expanded)}><Files size={15} />Documents<ChevronDown size={13} className={expanded ? styles.up : undefined} /></button>{statusAction}</div>
-    {expanded && <section id={panelId} aria-label={`Documents for ${item.number}`} className={styles.panel}>
+    {!standalone && <div className={styles.actions}><button type="button" className="button button-secondary button-small" aria-expanded={expanded} aria-controls={panelId}
+      onClick={() => setExpanded(!expanded)}><Files size={15} />Documents<ChevronDown size={13} className={expanded ? styles.up : undefined} /></button>{statusAction}</div>}
+    {(standalone || expanded) && <section id={panelId} aria-label={`Documents for ${item.number}`} className={styles.panel}>
       {DOCUMENT_KEYS.map(key => {
         const status = item.paperDocuments?.[key] ?? 'PENDING';
         return <div className={styles.row} key={key}><span>{DOCUMENT_NAMES[key]}</span>
