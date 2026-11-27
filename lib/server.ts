@@ -132,6 +132,16 @@ export async function mutateWorkspace(request: Request): Promise<{ data: Workspa
   const parsed = mutationSchema.safeParse(raw);
   if (!parsed.success) throw new CRMError('The change requires an action, payload, request ID and current workspace revision.');
   const input = parsed.data;
+  if (input.action === 'lead_delete') {
+    const deletion = z.object({ id: z.string().trim().min(1).max(120) }).strict().safeParse(input.payload);
+    if (!deletion.success) throw new CRMError('Choose one lead to delete.');
+    // This narrow RPC owns eligibility, current Owner authorization, revision,
+    // receipt replay and deletion under one lock. No browser-provided row diff.
+    return rpc<{ data: WorkspaceData; message: string }>('crm_lead_delete', {
+      p_actor_id: identity.userId, p_expected_revision: input.expectedRevision,
+      p_request_id: input.requestId, p_lead_id: deletion.data.id,
+    });
+  }
   const hash = await digest(input.action, input.payload);
   // This RPC reads the member, workspace and existing receipt under the same
   // database lock. Replays are resolved before state-dependent business validation.

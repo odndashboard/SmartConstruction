@@ -7,3 +7,14 @@
 .linkedJobs{display:flex;flex-wrap:wrap;gap:2px 14px}.linkedJobs button{font-size:12px!important;min-height:40px}
 
 .scheduleMissing{padding:13px 16px;margin:0 0 16px;border:1px solid #d4e0e7;border-radius:9px;background:#f5f8fa}.scheduleMissing summary{cursor:pointer;font-size:13px;font-weight:600;line-height:1.7;color:#395d73;padding:5px 0}.scheduleMissing>p{margin:10px 0 0}.scheduleRow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:3px 14px;padding:8px 0;border-top:1px solid #e2e9ee;margin-top:8px}.scheduleRow strong{font-size:13px;line-height:1.7;overflow-wrap:anywhere;min-width:0}.scheduleRow button{font-size:12px!important;min-height:44px}
+
+.deleteLead {
+  background: transparent;
+  border: 0;
+  color: #933b35;
+  min-height: 44px;
+  padding: 0 0.55rem;
+  cursor: pointer;
+}
+.deleteLead:hover { text-decoration: underline; }
+.deleteLead:disabled { opacity: 0.6; cursor: default; }

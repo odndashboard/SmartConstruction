@@ -5,6 +5,7 @@ import { createDemoData } from './demo.ts';
 import { DOCUMENT_KEYS, DOCUMENT_NAMES, type WorkDocumentKey } from './work-documents.ts';
 import { WORK_LABELS, WORK_TRANSITIONS } from './work-order-status.ts';
 import { REQUIRED_QUOTE_CATEGORIES, MAX_QUOTE_ITEMS, QUOTE_ITEM_SCHEMA_VERSION, validateRequiredQuoteItems } from './quotation-categories.ts';
+import { leadDeletionBlockReason } from './lead-deletion.ts';
 import type { WorkspaceData, Role, Lead, LeadStatus, Quotation, WorkOrder, WorkStatus, QuoteItemInput, Company } from './types';
 
 export class CRMError extends Error {
@@ -49,6 +50,7 @@ const schemas: Record<string, z.ZodType<any>> = {
     location: blank(), siteAddress: blank(2000), stateCode: state, value: text(30).default('0'), status: leadStatus.optional(),
     source: blank(100), owner, priority: z.enum(['High', 'Medium', 'Low']).default('Medium'), notes: blank(10000) }).strict(),
   lead_status: z.object({ id, status: leadStatus, lostReason: blank(3000) }).strict(),
+  lead_delete: identity,
   followup_save: z.object({ id: id.optional(), leadId: id, quoteId: id.nullable().optional(), title: required(), dueAt: z.string().datetime({ offset: true }),
     channel: z.enum(['Call', 'WhatsApp', 'Email', 'Site visit', 'Other']), owner, notes: blank(5000) }).strict(),
   followup_complete: z.object({ id, outcome: required(5000) }).strict(),
@@ -83,6 +85,7 @@ const DELIVERY: Role[] = ['OWNER', 'MANAGER', 'OPERATIONS'];
 const FOLLOW: Role[] = ['OWNER', 'MANAGER', 'SALES', 'OPERATIONS'];
 const permission: Record<string, Role[]> = {
   customer_save: SALES, lead_save: SALES, lead_status: APPROVE,
+  lead_delete: ['OWNER'],
   followup_save: FOLLOW, followup_complete: FOLLOW, followup_cancel: FOLLOW,
   quote_save: SALES, quote_revise: SALES,
   quote_issue: APPROVE, quote_accept: APPROVE, quote_decline: APPROVE, quote_expire: APPROVE, quote_reopen: APPROVE, quote_convert: APPROVE,
@@ -230,6 +233,14 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       if (lead.status === 'WON') ensureWonWorkOrder(data, lead, action, now);
       audit(data, action, 'lead', lead.id, `Lead moved to ${lead.status.toLowerCase().replaceAll('_', ' ')}`, stamp);
       return 'Lead status updated.';
+    }
+    case 'lead_delete': {
+      const lead = get(data.leads, p.id, 'Lead');
+      const reason = leadDeletionBlockReason(data, lead);
+      assert(!reason, reason || 'This lead cannot be deleted.');
+      data.leads = data.leads.filter(row => row.id !== lead.id);
+      audit(data, action, 'lead', lead.id, `Deleted standalone enquiry ${lead.title}`, stamp);
+      return 'Lead deleted.';
     }
     case 'followup_save': {
       const lead = get(data.leads, p.leadId, 'Lead');

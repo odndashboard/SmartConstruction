@@ -5,12 +5,13 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
+import { leadDeletionBlockReason } from '../lib/lead-deletion.ts';
 
 // Compile the real form and lead views in isolation from dashboard network effects.
 // The field components remain real; unrelated icons and formatting are simple stand-ins.
 const source = readFileSync(new URL('../components/CRMApp.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('CRMApp.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ['QuickLeadForm', 'LeadForm', 'LeadStatusForm', 'SimpleForm', 'Field', 'MemberOptions', 'assigneeValue', 'expectedKwInputValue', 'workOrderLeadId', 'LeadTable', 'LeadBoard', 'LeadDetail', 'DetailField', 'indexLeadCustomers', 'indexLeadOwners', 'useLeadViewLookup', 'groupLeadStages'];
+const names = ['LeadDeleteConfirmation', 'QuickLeadForm', 'LeadForm', 'LeadStatusForm', 'SimpleForm', 'Field', 'MemberOptions', 'assigneeValue', 'expectedKwInputValue', 'workOrderLeadId', 'LeadTable', 'LeadBoard', 'LeadDetail', 'DetailField', 'indexLeadCustomers', 'indexLeadOwners', 'useLeadViewLookup', 'groupLeadStages'];
 const declarations = names.map(name => {
   const node = ast.statements.find(item => ts.isFunctionDeclaration(item) && item.name?.text === name);
   assert.ok(node, `Missing component ${name}`);
@@ -21,7 +22,7 @@ const blank = () => null;
 const helpers = {
   useState: React.useState, useMemo: React.useMemo,
   FormFooter: blank, StateOptions: blank, Badge: wrapper, DemoTag: blank, IconButton: wrapper,
-  Avatar: blank, Notes: wrapper, FollowupRow: blank,
+  leadDeletionBlockReason, Trash2: blank, Avatar: blank, Notes: wrapper, FollowupRow: blank,
   Plus: blank, MoreHorizontal: blank, MapPin: blank, RefreshCw: blank, CalendarDays: blank,
   ArrowUpRight: blank, Pencil: blank, CircleAlert: blank, FileText: blank, ChevronRight: blank,
   ownerName: () => 'Sales colleague', formatINR: value => String(value), stateLabel: value => value,
@@ -170,4 +171,35 @@ test('Simple mode names approval and rejection while preserving the stored lead 
   assert.match(html, /value="WON">Approved \(Won\)/);
   assert.match(html, /value="LOST">Not approved \(Lost\)/);
   assert.match(html, /value="NEW"/);
+});
+
+
+test('deleting a standalone lead requires confirming its name and id', () => {
+  const calls = [];
+  const props = { lead: baseLead, data, busy: false, close: () => calls.push('close'), mutate: (...args) => calls.push(args) };
+  const dialog = components.LeadDeleteConfirmation(props);
+  assert.match(renderToStaticMarkup(dialog), /Solar installation/);
+  const [keep, remove] = fields(dialog).filter(item => item.type === 'button');
+  assert.deepEqual(calls, []);
+  keep.props.onClick();
+  assert.deepEqual(calls, ['close']);
+  remove.props.onClick();
+  assert.deepEqual(calls[1], ['lead_delete', { id: baseLead.id }]);
+  assert.ok(fields(components.LeadDeleteConfirmation({ ...props, busy: true })).filter(item => item.type === 'button').every(item => item.props.disabled));
+});
+
+test('lead history, examples and stale selections do not offer deletion', () => {
+  for (const [lead, related, reason] of [
+    [baseLead, { followups: [{ leadId: baseLead.id, status: 'DONE' }] }, /follow-up/],
+    [baseLead, { quotations: [{ leadId: baseLead.id, status: 'DRAFT' }] }, /quotation/],
+    [baseLead, { workorders: [{ leadId: baseLead.id }] }, /work order/],
+    [baseLead, { workorders: [{ snapshot: { leadId: baseLead.id } }] }, /work order/],
+    [{ ...baseLead, status: 'WON' }, {}, /Won/],
+    [{ ...baseLead, isDemo: true }, {}, /example/],
+    [undefined, {}, /no longer in the list/],
+  ]) {
+    const dialog = components.LeadDeleteConfirmation({ lead, data: { ...data, ...related }, busy: false, close() {}, mutate: assert.fail });
+    assert.match(renderToStaticMarkup(dialog), reason);
+    assert.deepEqual(fields(dialog).filter(item => item.type === 'button').map(item => item.props.children), ['Close']);
+  }
 });

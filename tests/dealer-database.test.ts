@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { applyAction } from '../lib/server-actions.ts';
 import type { WorkspaceData } from '../lib/types.ts';
+import type { OperationsData } from '../lib/operations-types.ts';
 import type { DealerLeadsData } from '../lib/dealer-leads.ts';
+import { dealerLeadsDataSchema } from '../lib/dealer-leads-validation.ts';
 
 // Real ordered migrations and PostgreSQL functions; no hosted accounts or data.
 // The single PGlite connection tests stale requests, not concurrent connections.
@@ -76,6 +78,11 @@ async function commit(input: ReturnType<typeof plan>) {
     [input.actor, input.revision, input.requestId, input.action, hash, JSON.stringify(input.changes), input.message]);
 }
 async function core(action: string, payload: unknown, actor = ids.owner) { return commit(plan(await workspace(actor), action, payload)); }
+async function operations(action: string, payload: unknown) {
+  const before = await query<OperationsData>('SELECT public.crm_operations_v2_read($1::uuid,$2) AS result', [ids.owner, month]);
+  return query<{ data: OperationsData }>('SELECT public.crm_operations_v2_mutate($1::uuid,$2::bigint,$3,$4,$5,$6::jsonb,$7) AS result',
+    [ids.owner, before.revision, crypto.randomUUID(), action, hash, JSON.stringify(payload), month]);
+}
 async function counts() {
   await role('postgres');
   const result = await query(`SELECT jsonb_build_object('revision',(SELECT revision FROM crm.workspace),'customers',(SELECT count(*) FROM crm.customers),
@@ -103,7 +110,9 @@ describe('Dealer portal: real database isolation and team upgrades', { concurren
     await addMember('retired', 'VIEWER'); await addMember('retiredInactive', 'VIEWER');
     await role('postgres'); await db.query('UPDATE crm.members SET active=false WHERE user_id=$1', [ids.retiredInactive]);
     await db.exec('COMMIT');
-    for (const file of ['20261127104930_dealer_lead_portal.sql', '20261127105440_work_order_paper_documents.sql']) {
+    for (const file of ['20261127104930_dealer_lead_portal.sql', '20261127105440_work_order_paper_documents.sql',
+      '20261127111750_compact_workspace_refresh.sql', '20261127113600_approved_lead_followups.sql',
+      '20261127122538_safe_lead_deletion.sql', '20261127122544_dealer_assigned_projects.sql']) {
       await db.exec(await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     }
   });
@@ -135,9 +144,11 @@ describe('Dealer portal: real database isolation and team upgrades', { concurren
     const own = await dealerCreate({ title: 'Roof enquiry', contact: 'Actual customer', phone: '9876543210', siteAddress: 'Real site', expectedKw: 5.25 });
     await dealerCreate({ title: 'Private second dealer enquiry' }, ids.otherDealer);
     await core('lead_save', { title: 'Internal enquiry', notes: 'Private internal notes', value: '140000' });
-    assert.deepEqual(Object.keys(own).sort(), ['leads', 'user']);
+    assert.deepEqual(Object.keys(own).sort(), ['assignedSites', 'leads', 'revision', 'user']);
     assert.deepEqual(Object.keys(own.user).sort(), ['name', 'role', 'userId']);
-    assert.deepEqual(Object.keys(own.leads[0]).sort(), ['contact', 'createdAt', 'expectedKw', 'id', 'phone', 'siteAddress', 'status', 'title', 'updatedAt']);
+    assert.deepEqual(Object.keys(own.leads[0]).sort(), ['canDelete', 'contact', 'createdAt', 'deleteBlockedReason', 'expectedKw', 'id', 'phone', 'siteAddress', 'status', 'title', 'updatedAt']);
+    assert.equal(own.leads[0].canDelete, true); assert.equal(own.leads[0].deleteBlockedReason, null);
+    assert.deepEqual(dealerLeadsDataSchema.parse(own), own);
     assert.equal(own.leads[0].expectedKw, 5.25); assert.equal(own.leads[0].status, 'NEW');
     const all = await workspace(); assert.equal(all.leads.length, 3); assert.equal(all.customers.length, 3);
     assert.deepEqual((await dealerRead()).leads.map(row => row.id), [own.leads[0].id]);
@@ -154,6 +165,120 @@ describe('Dealer portal: real database isolation and team upgrades', { concurren
     assert.deepEqual([customer(first.id).name, customer(first.id).contact, customer(first.id).phone, customer(first.id).email], ['Named contact', 'Named contact', '12345', '']);
     assert.deepEqual([customer(second.id).name, customer(second.id).contact, customer(second.id).phone, customer(second.id).email], ['Roof B', '', '', '']);
     assert.equal(first.expectedKw, null); assert.equal(second.expectedKw, 0);
+  });
+
+  test('admin-assigned leads appear only as scoped project progress and immediately follow reassignment', async () => {
+    for (const [title, owner] of [['Assigned roof A', ids.dealer], ['Assigned roof B', ids.otherDealer], ['Assigned roof C', ids.retired]]) {
+      await core('lead_save', { title, owner, expectedKw: 5.25, contact: 'PRIVATE_CONTACT', phone: 'PRIVATE_PHONE', notes: 'PRIVATE_NOTES', value: '10000' });
+    }
+    for (const [actor, title] of [[ids.dealer, 'Assigned roof A'], [ids.otherDealer, 'Assigned roof B'], [ids.retired, 'Assigned roof C']]) {
+      const snapshot = await dealerRead(actor);
+      assert.deepEqual(snapshot.leads, []); assert.equal(snapshot.assignedSites.length, 1);
+      const project = snapshot.assignedSites[0];
+      assert.equal(project.title, title); assert.equal(project.leadStatus, 'NEW'); assert.equal(project.expectedKw, 5.25);
+      assert.deepEqual(project.assignedVia, ['LEAD']); assert.equal(project.workOrderId, null);
+      assert.equal('canDelete' in project, false);
+      assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE_|customerId|contact|phone|notes|quotation|payment|members/);
+      assert.deepEqual(dealerLeadsDataSchema.parse(snapshot), snapshot);
+    }
+    const lead = (await workspace()).leads.find(row => row.title === 'Assigned roof A')!;
+    await core('lead_save', { id: lead.id, title: lead.title, owner: ids.otherDealer });
+    assert.deepEqual((await dealerRead()).assignedSites, []);
+    assert.equal((await dealerRead(ids.otherDealer)).assignedSites.length, 2);
+    await core('lead_save', { id: lead.id, title: lead.title, owner: '' });
+    assert.equal((await dealerRead(ids.otherDealer)).assignedSites.length, 1);
+  });
+
+  test('another dealer can receive an assigned project without receiving the submitting dealer contact or delete permission', async () => {
+    const created = await dealerCreate({ title: 'Shared assigned project', contact: 'PRIVATE_SUBMITTER_CONTACT', phone: 'PRIVATE_PHONE', expectedKw: 7.5 });
+    const lead = created.leads[0];
+    await core('lead_save', { id: lead.id, title: lead.title, contact: lead.contact, phone: lead.phone, owner: ids.otherDealer });
+    const submitted = await dealerRead(); const assigned = await dealerRead(ids.otherDealer);
+    assert.equal(submitted.leads[0].contact, 'PRIVATE_SUBMITTER_CONTACT'); assert.equal(submitted.leads[0].canDelete, false);
+    assert.ok(submitted.leads[0].deleteBlockedReason); assert.deepEqual(submitted.assignedSites, []);
+    assert.deepEqual(assigned.leads, []); assert.equal(assigned.assignedSites[0].leadId, lead.id);
+    assert.doesNotMatch(JSON.stringify(assigned), /PRIVATE_|contact|phone|dealerId|canDelete/);
+    await rejects(() => query('SELECT public.crm_dealer_lead_delete($1::uuid,$2::bigint,$3,$4) AS result',
+      [ids.otherDealer, assigned.revision, crypto.randomUUID(), lead.id]), 'PT404');
+    await core('lead_save', { id: lead.id, title: lead.title, owner: '' });
+    assert.deepEqual((await dealerRead(ids.otherDealer)).assignedSites, []);
+    assert.equal((await dealerRead()).leads[0].canDelete, false); // History still prevents deletion after unassignment.
+  });
+
+  test('work-owner and linked attendance-site routes expose progress once without commercial records or sibling jobs', async () => {
+    await core('lead_save', { title: 'Assigned delivery project', status: 'WON', owner: ids.sales, expectedKw: 8 });
+    const order = (await workspace()).workorders[0];
+    await core('workorder_save', { id: order.id, owner: ids.dealer, status: 'ACTIVE' });
+    await core('milestone_add', { workorderId: order.id, title: 'PRIVATE milestone detail' });
+    const milestone = (await workspace()).workorders[0].milestones[0];
+    await core('milestone_complete', { workorderId: order.id, milestoneId: milestone.id });
+    let snapshot = await dealerRead();
+    assert.equal(snapshot.assignedSites[0].workOrderStatus, 'ACTIVE');
+    assert.deepEqual(snapshot.assignedSites[0].assignedVia, ['WORK_ORDER']);
+    assert.equal(snapshot.assignedSites[0].completedMilestones, 1);
+    assert.equal(snapshot.assignedSites[0].totalMilestones, 1);
+    assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE|snapshot|customerName|quoteId|price|totals|payment/);
+    const sites = (await operations('site_save', { name: 'Assigned delivery site', address: 'Actual site location', workOrderId: order.id })).data.extension.sites;
+    const site = sites.find(row => row.name === 'Assigned delivery site')!;
+    await operations('site_assign', { userId: ids.dealer, siteId: site.id });
+    snapshot = await dealerRead();
+    assert.equal(snapshot.assignedSites.length, 1); assert.deepEqual(snapshot.assignedSites[0].assignedVia, ['WORK_ORDER', 'SITE']);
+    assert.equal(snapshot.assignedSites[0].siteId, site.id); assert.equal(snapshot.assignedSites[0].siteAddress, 'Actual site location');
+    await core('lead_save', { id: order.leadId, title: order.title, owner: ids.dealer });
+    assert.deepEqual((await dealerRead()).assignedSites[0].assignedVia, ['LEAD', 'WORK_ORDER', 'SITE']);
+    await core('lead_save', { id: order.leadId, title: order.title, owner: ids.sales });
+    await core('workorder_save', { id: order.id, owner: ids.sales, status: 'ACTIVE' });
+    assert.deepEqual((await dealerRead()).assignedSites[0].assignedVia, ['SITE']);
+    await core('lead_save', { title: 'Unassigned neighboring project', status: 'WON', owner: ids.sales });
+    assert.equal((await dealerRead()).assignedSites.length, 1);
+    await operations('site_assign', { userId: ids.dealer, siteId: null });
+    assert.deepEqual((await dealerRead()).assignedSites, []);
+  });
+
+  test('standalone site assignment is current, read-only and removed when site or member is inactive', async () => {
+    const first = (await operations('site_save', { name: 'First site', address: 'First address' })).data.extension.sites.find(row => row.name === 'First site')!;
+    const second = (await operations('site_save', { name: 'Second site' })).data.extension.sites.find(row => row.name === 'Second site')!;
+    const revision = (await dealerRead()).revision;
+    await operations('site_assign', { userId: ids.dealer, siteId: first.id });
+    const data = await dealerRead();
+    assert.equal(data.revision, revision); // Operations assignments must never be hidden by same-revision caching.
+    assert.equal(data.assignedSites[0].siteId, first.id); assert.equal(data.assignedSites[0].leadStatus, null);
+    assert.equal(data.assignedSites[0].workOrderStatus, null); assert.deepEqual(data.assignedSites[0].assignedVia, ['SITE']);
+    await operations('site_assign', { userId: ids.dealer, siteId: second.id });
+    assert.deepEqual((await dealerRead()).assignedSites.map(row => row.siteId), [second.id]);
+    await role('postgres'); await db.query('UPDATE crm.construction_sites SET active=false WHERE id=$1', [second.id]); await role('service_role');
+    assert.deepEqual((await dealerRead()).assignedSites, []);
+    await role('postgres'); await db.query('UPDATE crm.construction_sites SET active=true WHERE id=$1', [second.id]); await role('service_role');
+    await core('member_active', { userId: ids.dealer, active: false });
+    await rejects(() => dealerRead());
+    await core('member_active', { userId: ids.dealer, active: true });
+    assert.equal((await dealerRead()).assignedSites[0].siteId, second.id);
+    await core('member_role', { userId: ids.dealer, role: 'SALES' });
+    await rejects(() => dealerRead());
+  });
+
+  test('delete eligibility shares the mutation guard and deletion returns current assigned projects', async () => {
+    const untouched = (await dealerCreate({ title: 'Untouched own enquiry' })).leads[0];
+    const protectedLead = (await dealerCreate({ title: 'Assigned own enquiry' })).leads.find(row => row.id !== untouched.id)!;
+    await core('lead_save', { id: protectedLead.id, title: protectedLead.title, owner: ids.dealer });
+    const before = await dealerRead();
+    assert.equal(before.leads.find(row => row.id === untouched.id)!.canDelete, true);
+    assert.equal(before.leads.find(row => row.id === protectedLead.id)!.canDelete, false);
+    await role('postgres');
+    for (const lead of before.leads) {
+      const reason = await query<string | null>('SELECT crm.dealer_lead_delete_blocked_reason(l,$1::uuid) AS result FROM crm.leads l WHERE id=$2', [ids.dealer, lead.id]);
+      assert.equal(lead.canDelete, reason === null); assert.equal(lead.deleteBlockedReason, reason);
+    }
+    await role('service_role');
+    await rejects(() => query('SELECT public.crm_dealer_lead_delete($1::uuid,$2::bigint,$3,$4) AS result',
+      [ids.dealer, before.revision, crypto.randomUUID(), protectedLead.id]), 'PT409');
+    const result = await query<{ data: DealerLeadsData }>('SELECT public.crm_dealer_lead_delete($1::uuid,$2::bigint,$3,$4) AS result',
+      [ids.dealer, before.revision, crypto.randomUUID(), untouched.id]);
+    assert.equal(result.data.revision, before.revision + 1);
+    assert.deepEqual(result.data.assignedSites, before.assignedSites);
+    assert.deepEqual(result.data.leads.map(row => row.id), [protectedLead.id]);
+    assert.deepEqual(dealerLeadsDataSchema.parse(result.data), result.data);
+    const unchanged = await counts(); await dealerRead(); assert.deepEqual(await counts(), unchanged);
   });
 
   test('staff edits and status progress preserve immutable dealer origin independently of mutable staff ownership', async () => {
@@ -269,7 +394,7 @@ describe('Dealer portal: real database isolation and team upgrades', { concurren
 
   test('Owner can invite and set up Dealers while retired Viewer roles and dealer administrative actions are rejected', async () => {
     await addMember('outsider', 'DEALER');
-    assert.deepEqual(await dealerRead(ids.outsider), { user: { userId: ids.outsider, name: 'outsider', role: 'DEALER' }, leads: [] });
+    assert.deepEqual(await dealerRead(ids.outsider), { revision: (await workspace()).revision, assignedSites: [], user: { userId: ids.outsider, name: 'outsider', role: 'DEALER' }, leads: [] });
     const account = await query<{ userId: string; role: string }>('SELECT public.crm_account_member($1::uuid) AS result', [ids.outsider]);
     assert.equal(account.userId, ids.outsider); assert.equal(account.role, 'DEALER');
     const link = await query<{ userId: string }>('SELECT public.crm_authorize_member_link($1::uuid,$2::uuid) AS result', [ids.owner, ids.outsider]);

@@ -47,7 +47,7 @@ function quoteAction(quote: Quotation, permissions: Permissions): { label: strin
 
 export default function SimpleWorkspace(props: SimpleWorkspaceProps) {
   if (!props.workspace.user.active || !STAFF_ROLES.includes(props.workspace.user.role)) {
-    return <section className={styles.empty}><h1>Your workspace</h1><p>{props.workspace.user.role === 'DEALER' ? 'Use your dealer portal to add and follow your own leads.' : 'Your workspace access has changed. Sign in again to continue.'}</p>{props.workspace.user.active && props.workspace.user.role === 'DEALER' && <a href="/dealer">Open dealer portal</a>}</section>;
+    return <section className={styles.empty}><h1>Your workspace</h1><p>{props.workspace.user.role === 'DEALER' ? 'Open your dealer portal to add a lead or check your assigned sites.' : 'Your workspace access has changed. Sign in again to continue.'}</p>{props.workspace.user.active && props.workspace.user.role === 'DEALER' && <a href="/dealer">Open dealer portal</a>}</section>;
   }
   return <SimpleWorkspaceContent {...props} />;
 }
@@ -156,6 +156,7 @@ function SimpleLead({ lead, quotes, workorders, customerName, hasOpenFollowup, p
     <div className={styles.actions}>
       {permissions.approve && lead.status !== 'WON' && <button type="button" className={styles.primary} disabled={disabled} aria-label={`${lead.status === 'LOST' ? 'Reopen' : 'Change status of'} ${lead.title}`} onClick={() => open({ type: 'lead_status', id: lead.id })}>{lead.status === 'LOST' ? 'Reopen lead' : 'Change lead status'}</button>}
       {permissions.commercial && lead.status !== 'LOST' && <button type="button" className={styles.secondary} disabled={disabled} aria-label={`Quotation and follow-up for ${lead.title}`} onClick={() => open({ type: 'followup_quote', leadId: lead.id })}>Quotation & follow-up</button>}
+      {permissions.owner && <button type="button" className={styles.deleteLead} disabled={disabled} aria-label={`Delete ${lead.title}`} onClick={() => open({ type: 'lead_delete', id: lead.id })}>Delete lead</button>}
     </div>
     {!hasOpenFollowup && lead.status !== 'LOST' && <div className={styles.reminder}><span>No follow-up scheduled.</span>{permissions.follow && <button type="button" className={styles.textButton} disabled={disabled} aria-label={`Schedule follow-up for ${lead.title}`} onClick={() => open({ type: 'followup', leadId: lead.id })}>Schedule follow-up</button>}</div>}
     {quotes.length ? <details className={styles.related}><summary>{quotes.length === 1 ? `Quotation · ${QUOTE_LABELS[effectiveQuoteStatus(quotes[0])]}` : `${quotes.length} quotations · choose one`}</summary>

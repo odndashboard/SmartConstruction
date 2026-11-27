@@ -5,8 +5,8 @@ import { createDealerLead, DealerLeadRequestError, loadDealerLeads } from '../li
 import type { CreateDealerLeadRequest, DealerLeadsData } from '../lib/dealer-leads.ts';
 
 const request: CreateDealerLeadRequest = { requestId: 'dealer-request-1', payload: { title: 'Synthetic rooftop enquiry', expectedKw: 2.5 } };
-const data: DealerLeadsData = { user: { userId: '10000000-0000-4000-8000-000000000001', name: 'Synthetic Dealer', role: 'DEALER' }, leads: [
-  { id: 'lead-own', title: 'Own synthetic enquiry', contact: 'Synthetic Contact', phone: '9000000000', siteAddress: 'Synthetic roof', expectedKw: 2.5, status: 'NEW', createdAt: '2026-11-27T06:00:00Z', updatedAt: '2026-11-27T06:00:00Z' },
+const data: DealerLeadsData = { revision: 1, assignedSites: [], user: { userId: '10000000-0000-4000-8000-000000000001', name: 'Synthetic Dealer', role: 'DEALER' }, leads: [
+  { id: 'lead-own', title: 'Own synthetic enquiry', contact: 'Synthetic Contact', phone: '9000000000', siteAddress: 'Synthetic roof', expectedKw: 2.5, status: 'NEW', createdAt: '2026-11-27T06:00:00Z', updatedAt: '2026-11-27T06:00:00Z', canDelete: true, deleteBlockedReason: null },
 ] };
 
 test('dealer lead entry accepts only genuine basic fields, optional finite nonnegative numeric kW and a request identity', () => {
@@ -46,6 +46,22 @@ test('dealer transport reads only the scoped endpoint and preserves exact reques
   assert.equal(posts.length, 1);
   assert.deepEqual(await createDealerLead(request), data);
   assert.deepEqual(posts, [request, request]);
+});
+
+test('assigned project projection strips contact, commercial and delete fields and validates actual progress', () => {
+  const project = { id: 'workorder:work-1', title: 'Assigned project', siteAddress: 'Site', siteName: null, siteId: null,
+    leadId: 'lead-other', workOrderId: 'work-1', workOrderNumber: 'SC/WO/2026/0001', leadStatus: 'WON' as const,
+    workOrderStatus: 'ACTIVE' as const, expectedKw: 7.5, completedMilestones: 1, totalMilestones: 2, assignedVia: ['SITE'] };
+  const parsed = dealerLeadsDataSchema.parse({ ...data, assignedSites: [{ ...project, contact: 'private', phone: 'private',
+    snapshot: { total: 10000 }, customerName: 'private', canDelete: true, members: [{ name: 'private' }] }] });
+  assert.deepEqual(parsed.assignedSites, [project]);
+  for (const invalid of [{ completedMilestones: 3 }, { totalMilestones: -1 }, { workOrderStatus: 'ISSUED' },
+    { assignedVia: [] }, { assignedVia: ['OWNER'] }, { expectedKw: -1 }, { siteId: 'not-a-uuid' }]) {
+    assert.equal(dealerLeadsDataSchema.safeParse({ ...data, assignedSites: [{ ...project, ...invalid }] }).success, false);
+  }
+  for (const revision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1', undefined]) {
+    assert.equal(dealerLeadsDataSchema.safeParse({ ...data, revision }).success, false);
+  }
 });
 
 test('dealer validation failures remain editable; access faults clear private state and server uncertainty keeps retry identity', async t => {

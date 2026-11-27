@@ -7,13 +7,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import { DealerLeadRequestError } from '../lib/dealer-leads-client.ts';
 import { LEAD_STAGES, ROLE_LABELS } from '../lib/types.ts';
+import { WORK_LABELS } from '../lib/work-order-status.ts';
 
 let stores = new Map(), key = '', cursor = 0;
-let load = async () => data(), create = async () => data();
+let load = async () => data(), create = async () => data(), remove = async () => ({ data: data(), message: 'Lead deleted.' }), effects = [];
+const listeners = new Map();
+const eventTarget = { addEventListener(name, handler) { listeners.set(name, handler); }, removeEventListener(name) { listeners.delete(name); } };
+const browserDocument = { ...eventTarget, visibilityState: 'visible' };
 const blank = () => null;
 function slot(initial) { const values = stores.get(key); const index = cursor++; if (!(index in values)) values[index] = typeof initial === 'function' ? initial() : initial; return [values[index], value => { values[index] = typeof value === 'function' ? value(values[index]) : value; }]; }
-const helpers = { useState: slot, useRef: value => slot({ current: value })[0], useCallback: fn => fn, useEffect() {}, useId: () => 'team-id',
-  DealerLeadRequestError, LEAD_STAGES, ROLE_LABELS, loadDealerLeads: (...args) => load(...args), createDealerLead: (...args) => create(...args),
+const helpers = { useState: slot, useRef: value => slot({ current: value })[0], useCallback: fn => fn, useEffect(fn) { effects.push(fn); }, useId: () => 'team-id',
+  DealerLeadRequestError, LEAD_STAGES, ROLE_LABELS, WORK_LABELS, window: eventTarget, document: browserDocument, loadDealerLeads: (...args) => load(...args), createDealerLead: (...args) => create(...args), deleteDealerLead: (...args) => remove(...args),
   SignOutButton: () => React.createElement('button', null, 'Sign out'), styles: new Proxy({}, { get: (_, name) => name }),
   ArrowRight: blank, Check: blank, CircleAlert: blank, LoaderCircle: blank, MapPin: blank, Plus: blank, RefreshCw: blank, UsersRound: blank, X: blank,
   ChevronDown: blank, Copy: blank, KeyRound: blank, RotateCcw: blank, ShieldCheck: blank, UserRound: blank, UserRoundMinus: blank };
@@ -22,11 +26,12 @@ function compile(path, extra = '') {
   const code = ts.transpileModule(`${source}\n${extra}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const exports = {}; new Function('require', 'exports', ...Object.keys(helpers), code)(createRequire(import.meta.url), exports, ...Object.values(helpers)); return exports;
 }
-const views = compile('../components/DealerPortal.tsx', 'export { DealerLeadForm, dealerLeadPayload };');
+const views = compile('../components/DealerPortal.tsx', 'export { DealerLeadForm, DealerAssignments, dealerLeadPayload };');
 const team = compile('../components/TeamSettings.tsx');
-const lead = { id: 'own-lead', title: 'Own solar enquiry', contact: 'Genuine contact', phone: '9000000000', siteAddress: 'Own submitted site', expectedKw: 0, status: 'SITE_VISIT', createdAt: '2026-11-27T06:00:00Z', updatedAt: '2026-11-27T07:00:00Z' };
-function data(overrides = {}) { return { user: { userId: 'dealer', name: 'Synthetic Dealer', role: 'DEALER' }, leads: [lead], ...overrides }; }
-function reset() { stores = new Map(); load = async () => data(); create = async () => data(); }
+const lead = { id: 'own-lead', title: 'Own solar enquiry', contact: 'Genuine contact', phone: '9000000000', siteAddress: 'Own submitted site', expectedKw: 0, status: 'SITE_VISIT', createdAt: '2026-11-27T06:00:00Z', updatedAt: '2026-11-27T07:00:00Z', canDelete: false, deleteBlockedReason: 'Only new enquiries can be deleted.' };
+const assigned = { id: 'assigned-work', title: 'Assigned installation', siteAddress: 'Assigned roof', siteName: 'Team site', siteId: 'site', leadId: 'not-own-lead', workOrderId: 'work', workOrderNumber: 'WO/1', leadStatus: 'WON', workOrderStatus: 'ACTIVE', expectedKw: 0, completedMilestones: 1, totalMilestones: 3, assignedVia: ['LEAD', 'WORK_ORDER', 'SITE'] };
+function data(overrides = {}) { return { revision: 7, user: { userId: 'dealer', name: 'Synthetic Dealer', role: 'DEALER' }, leads: [lead], assignedSites: [], ...overrides }; }
+function reset() { stores = new Map(); load = async () => data(); create = async () => data(); remove = async () => ({ data: data(), message: 'Lead deleted.' }); effects = []; listeners.clear(); browserDocument.visibilityState = 'visible'; }
 function invoke(fn, props, name) { key = name; cursor = 0; if (!stores.has(key)) stores.set(key, []); return fn(props); }
 function portal(props = {}) { return invoke(views.default, { initialData: data(), ...props }, 'portal'); }
 function form(props = {}) { return invoke(views.DealerLeadForm, { disabled: false, submit() {}, close() {}, report() {}, ...props }, 'form'); }
@@ -89,4 +94,81 @@ test('team settings offers Dealer instead of Viewer and describes the limited po
   const options = elements(select).filter(item => item.type === 'option').map(item => item.props.value);
   assert.ok(options.includes('DEALER')); assert.ok(!options.includes('VIEWER'));
   const html = renderToStaticMarkup(tree); assert.match(html, /own submitted leads/); assert.match(html, /separate dealer portal/); assert.doesNotMatch(html, /Viewer/);
+});
+
+test('assigned sites remain visible without submissions and show only explicit assigned project progress', () => {
+  reset(); const html = renderToStaticMarkup(portal({ initialData: data({ leads: [], assignedSites: [assigned] }) }));
+  for (const text of ['Assigned sites', 'Assigned installation', 'Assigned roof', 'Team site', 'WO/1', 'In progress', '0 kW', '1 of 3 milestones completed', 'Your first lead starts here']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /not-own-lead|Delete enquiry|Genuine contact|Payments|Quotation total/);
+  reset(); assert.match(renderToStaticMarkup(portal()), /No sites are assigned to you yet/);
+});
+
+test('deletion names the eligible enquiry, requires confirmation and replays only its original uncertain request', async () => {
+  reset(); const calls = [];
+  const ownNew = { ...lead, status: 'NEW', canDelete: true, deleteBlockedReason: null };
+  const initialData = data({ leads: [ownNew], assignedSites: [assigned] });
+  remove = async request => { calls.push(request); if (calls.length === 1) throw new DealerLeadRequestError('Response lost', 0, true); return { data: data({ revision: 8, leads: [], assignedSites: [assigned] }), message: 'Lead deleted.' }; };
+  let tree = portal({ initialData });
+  button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
+  assert.equal(calls.length, 0);
+  assert.match(renderToStaticMarkup(tree), /Delete “Own solar enquiry”\?/);
+  assert.match(renderToStaticMarkup(tree), /cannot be undone/);
+  button(tree, 'Keep enquiry').props.onClick(); tree = portal({ initialData });
+  assert.equal(elements(tree).find(item => item.props.role === 'alertdialog'), undefined);
+  button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
+  const confirmation = elements(tree).find(item => item.props.role === 'alertdialog');
+  button(confirmation, 'Delete enquiry').props.onClick(); button(confirmation, 'Delete enquiry').props.onClick();
+  await new Promise(done => setImmediate(done)); tree = portal({ initialData });
+  assert.equal(calls.length, 1); assert.equal(calls[0].leadId, 'own-lead'); assert.equal(calls[0].expectedRevision, 7);
+  assert.match(renderToStaticMarkup(tree), /Deletion not yet confirmed/);
+  button(tree, 'Retry deletion').props.onClick(); await new Promise(done => setImmediate(done)); tree = portal({ initialData });
+  assert.deepEqual(calls[1], calls[0]);
+  assert.match(renderToStaticMarkup(tree), /“Own solar enquiry” was deleted/);
+  assert.match(renderToStaticMarkup(tree), /Assigned installation/);
+  assert.equal(elements(tree).find(item => item.props.role === 'alertdialog'), undefined);
+  assert.equal(button(tree, 'Delete enquiry'), undefined);
+});
+
+test('protected enquiries have an explanation without a delete action; denied deletion refreshes eligibility without revoking active access', async () => {
+  reset(); let tree = portal(); assert.equal(button(tree, 'Delete enquiry'), undefined);
+  assert.match(renderToStaticMarkup(tree), /Only new enquiries can be deleted/);
+  reset(); const initialData = data({ leads: [{ ...lead, status: 'NEW', canDelete: true, deleteBlockedReason: null }] });
+  remove = async () => { throw new DealerLeadRequestError('This enquiry is now assigned.', 403, false, false); };
+  load = async () => data({ revision: 8, leads: [{ ...lead, status: 'NEW', deleteBlockedReason: 'Assigned enquiries are protected.' }], assignedSites: [assigned] });
+  tree = portal({ initialData }); button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
+  button(elements(tree).find(item => item.props.role === 'alertdialog'), 'Delete enquiry').props.onClick();
+  await new Promise(done => setImmediate(done)); tree = portal({ initialData });
+  assert.match(renderToStaticMarkup(tree), /Assigned enquiries are protected/); assert.match(renderToStaticMarkup(tree), /Assigned installation/);
+  assert.doesNotMatch(renderToStaticMarkup(tree), /Dealer access has changed|Retry deletion/); assert.equal(button(tree, 'Delete enquiry'), undefined);
+});
+
+test('regaining focus refreshes assignments and role, coalesces duplicate resume events and clears scoped data after revocation', async () => {
+  reset(); let resolveRead, count = 0;
+  load = () => { count++; return new Promise(resolve => { resolveRead = resolve; }); };
+  portal(); const cleanup = effects.at(-1)();
+  listeners.get('focus')(); listeners.get('visibilitychange')(); assert.equal(count, 1);
+  resolveRead(data({ assignedSites: [assigned] })); await new Promise(done => setImmediate(done));
+  assert.match(renderToStaticMarkup(portal()), /Assigned installation/);
+  load = async () => { throw new DealerLeadRequestError('Dealer access removed', 403); };
+  listeners.get('focus')(); await new Promise(done => setImmediate(done));
+  const html = renderToStaticMarkup(portal()); assert.match(html, /Dealer access has changed/); assert.doesNotMatch(html, /Own solar enquiry|Assigned installation/);
+  cleanup(); assert.equal(listeners.size, 0);
+});
+
+test('a stale read cannot restore a deleted enquiry and a focus event during deletion validates the latest scoped access afterwards', async () => {
+  reset(); const initialData = data({ leads: [{ ...lead, status: 'NEW', canDelete: true, deleteBlockedReason: null }] });
+  let finishRead, finishDelete;
+  load = () => new Promise(resolve => { finishRead = resolve; });
+  remove = () => new Promise(resolve => { finishDelete = resolve; });
+  let tree = portal({ initialData }); const cleanup = effects.at(-1)();
+  button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
+  const confirmation = elements(tree).find(item => item.props.role === 'alertdialog');
+  listeners.get('focus')();
+  button(confirmation, 'Delete enquiry').props.onClick();
+  finishRead(data({ assignedSites: [assigned] })); await new Promise(done => setImmediate(done));
+  listeners.get('focus')();
+  load = async () => { throw new DealerLeadRequestError('Access removed', 403); };
+  finishDelete({ data: data({ revision: 8, leads: [] }), message: 'Lead deleted.' }); await new Promise(done => setImmediate(done));
+  assert.doesNotMatch(renderToStaticMarkup(portal({ initialData })), /Own solar enquiry|Assigned installation/);
+  assert.match(renderToStaticMarkup(portal({ initialData })), /Dealer access has changed/); cleanup();
 });

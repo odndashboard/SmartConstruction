@@ -26,7 +26,7 @@ const helpers = {
   Avatar: ({ name }) => React.createElement('span', { title: name }, name),
   IconButton: ({ label, onClick }) => React.createElement('button', { 'aria-label': label, onClick }),
   Plus: blank, MoreHorizontal: blank, MapPin: blank, RefreshCw: blank,
-  CalendarDays: blank, ArrowUpRight: blank,
+  Trash2: blank, CalendarDays: blank, ArrowUpRight: blank,
   formatINR: value => `INR ${value}`, stateLabel: code => code,
   leadLabel: status => status, displayDate: value => value,
 };
@@ -161,4 +161,17 @@ test('1000 lead fixture removes repeated full-array lookups and five separate bo
   assert.deepEqual(before, { customer: 500500, member: 26500, demo: 1500000, stage: 5000 });
   assert.deepEqual(after, { customer: 1000, member: 20, demo: 3000, stage: 1000 });
   t.diagnostic(`Record-field reads for 1,000 visible leads: ${JSON.stringify(before)} -> ${JSON.stringify(after)}. Rendering and Map lookups remain linear.`);
+});
+
+
+test('advanced Leads offers Delete on both views only to an active owner', () => {
+  const data = workspace();
+  const leads = [lead('roof')];
+  for (const [role, active, visible] of [['OWNER', true, true], ['OWNER', false, false], ['MANAGER', true, false], ['SALES', true, false]]) {
+    data.user = { role, active };
+    for (const view of ['LeadBoard', 'LeadTable']) {
+      assert.equal(render(view, { data, leads }).includes('Delete Project roof'), visible);
+    }
+    assert.doesNotMatch(render('LeadBoard', { data, leads, dashboard: true }), /Delete Project roof/);
+  }
 });

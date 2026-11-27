@@ -47,7 +47,7 @@ Missing configuration produces a setup-pending screen. It does not enable demo a
 | Sales | Customer and lead details, follow-ups, draft quotations and revisions; lead status stays unchanged |
 | Operations | Follow-ups, existing work orders, and milestones |
 | Accountant | Read/export CRM records, stock entries, own attendance and own expenses with receipts |
-| Dealer | Submit leads and track the current status of personally submitted leads |
+| Dealer | Submit and track enquiries, delete their own untouched new enquiries, and view progress on assigned sites |
 
 **Core CRM records and stock are shared with active internal staff. Dealers use a separate lead portal.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers and Accountants remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
 

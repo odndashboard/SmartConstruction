@@ -119,6 +119,7 @@ test('simple actions preserve role policies and keep Dealer/inactive accounts ou
   for (const role of ['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT']) {
     const data = fixture(role); data.leads[0].status = 'WON';
     const lead = html(row('SimpleLead', data, { lead: baseLead, quotes: [{ ...baseQuote, status: 'DRAFT' }], hasOpenFollowup: false }));
+    assert.equal(lead.includes('Delete lead'), role === 'OWNER');
     assert.equal(lead.includes('Change lead status'), ['OWNER', 'MANAGER'].includes(role));
     assert.equal(lead.includes('Quotation &amp; follow-up'), ['OWNER', 'MANAGER', 'SALES'].includes(role));
     const follow = html(row('SimpleFollowup', data, { item: baseFollow, lead: baseLead }));
@@ -215,4 +216,12 @@ test('follow-ups offer first reminders only for real approved leads with no hist
   data.user.role = 'OPERATIONS'; assert.match(html(content(data, props)), /Approved leads to schedule/);
   assert.equal(button(content(data, { ...props, busy: true }), 'Schedule first follow-up for Project first').props.disabled, true);
   data.user.role = 'ACCOUNTANT'; assert.doesNotMatch(html(content(data, props)), /Approved leads to schedule|Schedule first follow-up/);
+});
+
+
+test('simple Delete opens confirmation for the selected lead', () => {
+  const opened = [];
+  const card = row('SimpleLead', fixture(), { lead: baseLead, quotes: [], hasOpenFollowup: false, open: target => opened.push(target) });
+  button(card, 'Delete Solar roof').props.onClick();
+  assert.deepEqual(opened, [{ type: 'lead_delete', id: 'lead' }]);
 });

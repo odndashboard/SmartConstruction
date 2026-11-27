@@ -27,7 +27,7 @@ process.env.APP_URL = 'https://crm.example.test';
 let state;
 beforeEach(() => {
   const actorId = '10000000-0000-4000-8000-000000000001';
-  state = { actorId, data: { user: { userId: actorId, name: 'Synthetic Dealer', role: 'DEALER' }, leads: [] }, authCalls: 0, calls: [], authError: null, rpcError: null };
+  state = { actorId, data: { revision: 1, assignedSites: [], user: { userId: actorId, name: 'Synthetic Dealer', role: 'DEALER' }, leads: [] }, authCalls: 0, calls: [], authError: null, rpcError: null };
   globalThis[fixtureKey] = state;
 });
 after(() => { hooks.deregister(); delete globalThis[fixtureKey]; if (priorOrigin === undefined) delete process.env.APP_URL; else process.env.APP_URL = priorOrigin; });
@@ -71,10 +71,23 @@ test('dealer create forwards immutable authenticated origin and the same receipt
   assert.deepEqual(state.calls[1].args, state.calls[0].args);
 });
 
+test('dealer GET and POST share the same whitelisted assigned project projection with no additional workspace query', async () => {
+  const project = { id: 'lead:assigned-1', title: 'Assigned enquiry', siteAddress: 'Site', siteName: null, siteId: null,
+    leadId: 'assigned-1', workOrderId: null, workOrderNumber: null, leadStatus: 'SITE_VISIT', workOrderStatus: null,
+    expectedKw: 2.5, completedMilestones: 0, totalMilestones: 0, assignedVia: ['LEAD'] };
+  state.data.assignedSites = [{ ...project, contact: 'PRIVATE_CONTACT', phone: 'PRIVATE_PHONE', customer: { email: 'PRIVATE_EMAIL' }, canDelete: true }];
+  for (const response of [await GET(new Request(`${origin}/api/dealer-leads`)), await POST(request(mutation()))]) {
+    assert.equal(response.status, 200);
+    const body = await response.json(); assert.deepEqual(body.assignedSites, [project]); assert.equal(body.revision, 1);
+    assert.doesNotMatch(JSON.stringify(body), /PRIVATE|canDelete|customer/);
+  }
+  assert.equal(state.calls.length, 2); assert.equal(state.authCalls, 2);
+});
+
 test('dealer reads and saves never expose a valid upstream snapshot belonging to a different authenticated user', async () => {
-  state.data = { user: { userId: '10000000-0000-4000-8000-000000000002', name: 'Other dealer', role: 'DEALER' }, leads: [{
+  state.data = { revision: 1, assignedSites: [], user: { userId: '10000000-0000-4000-8000-000000000002', name: 'Other dealer', role: 'DEALER' }, leads: [{
     id: 'other-lead', title: 'Private other-dealer enquiry', contact: 'Private contact', phone: '', siteAddress: '', expectedKw: 5,
-    status: 'NEW', createdAt: '2026-11-27T00:00:00Z', updatedAt: '2026-11-27T00:00:00Z',
+    status: 'NEW', createdAt: '2026-11-27T00:00:00Z', updatedAt: '2026-11-27T00:00:00Z', canDelete: false, deleteBlockedReason: 'Already assigned.',
   }] };
   for (const response of [await GET(new Request(`${origin}/api/dealer-leads`)), await POST(request(mutation()))]) {
     assert.equal(response.status, 503);
