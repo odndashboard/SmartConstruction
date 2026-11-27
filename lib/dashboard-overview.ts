@@ -1,6 +1,7 @@
 import type { WorkspaceData } from './types';
 import type { AttendanceStatus, ExpenseTotals, OperationsData } from './operations-types';
 import { todayIST } from './finance.ts';
+import { effectiveQuoteStatus } from './quotation-status.ts';
 
 export interface DashboardCoreSummary {
   openLeads: number; pipelinePaise: string;
@@ -62,7 +63,7 @@ export function buildDashboardOverview(workspace: WorkspaceData, operations: Ope
   const instant = now ?? snapshotTime ?? new Date();
   const today = todayIST(instant), month = today.slice(0, 7);
   const openLeads = workspace.leads.filter(row => row.status !== 'WON' && row.status !== 'LOST');
-  const pendingQuotes = workspace.quotations.filter(row => row.status === 'ISSUED' && row.validUntil >= today);
+  const pendingQuotes = workspace.quotations.filter(row => effectiveQuoteStatus(row, today) === 'ISSUED');
   const openFollowups = workspace.followups.filter(row => row.status === 'OPEN');
   const overview: DashboardOverviewSummary = {
     today, month, asOf: instant.toISOString(),

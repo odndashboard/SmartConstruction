@@ -67,6 +67,7 @@ There is no public self-registration screen and no first-visitor-is-owner rule. 
 - Money is calculated using integer paise and exact intermediate arithmetic.
 - Real company registration, GSTIN, property location/state, and line-item tax information must be configured before issuing a real quotation. The app does not invent a company GSTIN or choose a universal construction GST rate.
 - Issuing freezes supplier/customer details and quote amounts. Editing issued commercial terms requires a new revision.
+- Owners and Managers can use **Quotations → Change status** to issue a draft as **Awaiting approval**, record customer acceptance, or mark an issued quotation **Expired**. A quotation expired early can return to **Awaiting approval** through its original valid-until date. After that date, use **Create revision** to set a new validity period.
 - Marking a lead Won automatically creates its Planned work order, including when the lead has no quotation. The work order shows project details and expected kW; approved totals remain blank until a quotation is accepted.
 - Customer acceptance records an acceptance note, marks the lead Won and automatically creates or links that quotation's work order with its approved snapshot.
 - Repeating the Won update or quotation conversion reuses the existing applicable order. An accepted quotation can produce only one work order; its approved commercial snapshot is retained. Every additional accepted quotation automatically receives a separate work order for its own scope without overwriting an earlier order.

@@ -1,5 +1,6 @@
 import { getWorkspace, errorResponse, CRMError } from '../../../lib/server';
 import { todayIST } from '../../../lib/finance';
+import { effectiveQuoteStatus } from '../../../lib/quotation-status';
 import { getOperationsExport } from '../../../lib/operations-server';
 export const dynamic = 'force-dynamic';
 function exactQuantity(value: string): string {
@@ -41,7 +42,7 @@ export async function GET(request: Request) {
       followups: { headings: ['ID', 'Lead ID', 'Title', 'Due at', 'Channel', 'Owner user ID', 'Status', 'Outcome', 'Example'],
         rows: data.followups.map(r => [r.id, r.leadId, r.title, r.dueAt, r.channel, r.owner, r.status, r.outcome, r.isDemo]) },
       quotations: { headings: ['ID', 'Number', 'Title', 'Status', 'Revision', 'Valid until', 'Place of supply', 'Taxable INR', 'Total INR', 'Tax calculation needs setup', 'Example'],
-        rows: data.quotations.map(r => [r.id, r.number, r.title, r.status, r.revision, r.validUntil, r.placeOfSupply, (r.totals.taxable / 100).toFixed(2), (r.totals.total / 100).toFixed(2), r.totals.needsConfig, r.isDemo]) },
+        rows: data.quotations.map(r => [r.id, r.number, r.title, effectiveQuoteStatus(r, todayIST()), r.revision, r.validUntil, r.placeOfSupply, (r.totals.taxable / 100).toFixed(2), (r.totals.total / 100).toFixed(2), r.totals.needsConfig, r.isDemo]) },
       workorders: { headings: ['ID', 'Number', 'Quotation ID', 'Title', 'Customer', 'Status', 'Owner user ID', 'Start date', 'End date', 'Accepted total INR', 'Example', 'Lead ID', 'Expected kW'],
         rows: data.workorders.map(r => [r.id, r.number, r.quoteId, r.title, r.customerName, r.status, r.owner, r.startDate, r.endDate, r.snapshot ? (r.snapshot.totals.total / 100).toFixed(2) : '', r.isDemo, r.leadId ?? r.snapshot?.leadId, r.expectedKw]) },
       ...(operations ? {

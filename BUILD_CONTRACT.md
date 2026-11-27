@@ -30,7 +30,7 @@ Failure rolls back the entire transaction. A reused request ID with a different 
 
 `POST /api/workspace` receives `{action,payload,expectedRevision,requestId}` and returns `{data,message}` or `{error}` with an appropriate status. Preserve the same request ID when retrying the same pending change after a network failure.
 
-Business actions: `customer_save`, `lead_save`, `lead_status`, `followup_save`, `followup_complete`, `followup_cancel`, `quote_save`, `quote_issue`, `quote_accept`, `quote_decline`, `quote_revise`, `quote_convert`, `workorder_save`, `milestone_add`, `milestone_complete`, `company_save`, `member_role`, `member_active`, `load_demo`, `clear_demo`.
+Business actions: `customer_save`, `lead_save`, `lead_status`, `followup_save`, `followup_complete`, `followup_cancel`, `quote_save`, `quote_issue`, `quote_accept`, `quote_expire`, `quote_reopen`, `quote_decline`, `quote_revise`, `quote_convert`, `workorder_save`, `milestone_add`, `milestone_complete`, `company_save`, `member_role`, `member_active`, `load_demo`, `clear_demo`.
 
 `GET /api/export` is authenticated and uses the same active-membership guard. All private responses and activation-link responses must be uncached.
 

@@ -54,6 +54,8 @@ const schemas: Record<string, z.ZodType<any>> = {
   quote_issue: identity,
   quote_accept: z.object({ id, acceptanceNote: required(5000) }).strict(),
   quote_decline: identity,
+  quote_expire: identity,
+  quote_reopen: identity,
   quote_revise: identity,
   quote_convert: identity,
   workorder_save: z.object({ id, owner, startDate: optionalDate, endDate: optionalDate, status: workStatus }).strict(),
@@ -74,7 +76,7 @@ const permission: Record<string, Role[]> = {
   customer_save: SALES, lead_save: SALES, lead_status: APPROVE,
   followup_save: FOLLOW, followup_complete: FOLLOW, followup_cancel: FOLLOW,
   quote_save: SALES, quote_revise: SALES,
-  quote_issue: APPROVE, quote_accept: APPROVE, quote_decline: APPROVE, quote_convert: APPROVE,
+  quote_issue: APPROVE, quote_accept: APPROVE, quote_decline: APPROVE, quote_expire: APPROVE, quote_reopen: APPROVE, quote_convert: APPROVE,
   workorder_save: DELIVERY, milestone_add: DELIVERY, milestone_complete: DELIVERY,
   company_save: ['OWNER'], member_role: ['OWNER'], member_active: ['OWNER'], load_demo: ['OWNER'], clear_demo: ['OWNER'],
 };
@@ -294,6 +296,21 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       quote.status = 'DECLINED'; quote.updatedAt = stamp;
       audit(data, action, 'quotation', quote.id, `Quotation ${quote.number} declined`, stamp);
       return 'Quotation marked declined.';
+    }
+    case 'quote_expire':
+    case 'quote_reopen': {
+      const quote = get(data.quotations, p.id, 'Quotation');
+      if (action === 'quote_expire') {
+        assert(quote.status === 'ISSUED', 'Only an issued quotation can be marked expired.');
+        quote.status = 'EXPIRED';
+      } else {
+        assert(quote.status === 'EXPIRED', 'Only an expired quotation can be reopened.');
+        assert(quote.validUntil >= today, 'The quotation validity date has passed. Create and issue a revision.');
+        quote.status = 'ISSUED';
+      }
+      quote.updatedAt = stamp;
+      audit(data, action, 'quotation', quote.id, action === 'quote_expire' ? `Marked quotation ${quote.number} expired` : `Reopened quotation ${quote.number} for approval`, stamp);
+      return action === 'quote_expire' ? 'Quotation marked expired.' : 'Quotation reopened for approval.';
     }
     case 'quote_revise': {
       const original = get(data.quotations, p.id, 'Quotation');

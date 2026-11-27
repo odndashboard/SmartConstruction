@@ -126,7 +126,7 @@ describe('server-side authorization and input boundaries', () => {
     setRole(data, 'ACCOUNTANT');
     for (const action of [
       'customer_save', 'lead_save', 'lead_status', 'followup_save', 'followup_complete', 'followup_cancel',
-      'quote_save', 'quote_revise', 'quote_issue', 'quote_accept', 'quote_decline', 'quote_convert',
+      'quote_save', 'quote_revise', 'quote_issue', 'quote_accept', 'quote_decline', 'quote_expire', 'quote_reopen', 'quote_convert',
       'workorder_save', 'milestone_add', 'milestone_complete', 'company_save', 'member_role', 'member_active',
       'load_demo', 'clear_demo',
     ]) expectDenied(() => act(data, action, {}));

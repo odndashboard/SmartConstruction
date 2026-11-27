@@ -28,7 +28,7 @@ const helpers = {
   Badge: wrapper, DemoTag: blank, IconButton: wrapper, Avatar: blank, Notes: wrapper, FollowupRow: blank,
   Plus: blank, MoreHorizontal: blank, CalendarDays: blank, HardHat: () => null, ArrowUpRight: blank,
   Pencil: blank, Check: blank, CircleAlert: blank, FileText: blank, ChevronRight: blank,
-  RefreshCw: blank, ArrowRight: blank, Printer: blank, CheckCircle2: blank,
+  RefreshCw: blank, ArrowRight: blank, Printer: blank, CheckCircle2: blank, ChevronDown: blank,
   WORK_LABELS: { PLANNED: 'Planned', ACTIVE: 'In progress', COMPLETED: 'Completed' },
   QUOTE_LABELS: { ACCEPTED: 'Accepted' },
   ownerName: () => 'Project owner', displayDate: value => value || 'Not scheduled',

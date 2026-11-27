@@ -3,6 +3,7 @@ import { after, afterEach, before, beforeEach, describe, test } from 'node:test'
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { applyAction } from '../lib/server-actions.ts';
+import { financialYear, todayIST } from '../lib/finance.ts';
 import type { WorkspaceData } from '../lib/types.ts';
 
 /**
@@ -22,7 +23,9 @@ const ids = {
   secondOwner: '00000000-0000-4000-8000-000000000008',
   accountant: '00000000-0000-4000-8000-000000000009',
 };
-const NOW = new Date('2026-11-23T06:00:00Z');
+const NOW = new Date();
+const FUTURE_DATE = todayIST(new Date(NOW.getTime() + 30 * 24 * 60 * 60 * 1000));
+const WORK_ORDER_KEY = `WO/${financialYear(NOW)}`;
 const hash = 'a'.repeat(64);
 let db: PGlite;
 
@@ -104,16 +107,29 @@ async function mutate(action: string, payload: unknown, actor = ids.owner) {
   return commit(plan(await read(actor), action, payload));
 }
 
-async function issuedQuote(leadId: string, title = 'Accepted work scope') {
+async function issuedQuote(leadId: string, title = 'Accepted work scope', validUntil = FUTURE_DATE) {
   const data = await read();
   const lead = data.leads.find(row => row.id === leadId)!;
   const customer = data.customers.find(row => row.id === lead.customerId)!;
   await mutate('company_save', { name: data.company.name, legalName: 'Test contractor', address: 'Actual supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: data.company.terms });
   await mutate('customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, email: customer.email, address: 'Confirmed billing address', stateCode: '06', gstin: customer.gstin });
-  const saved = await mutate('quote_save', { leadId, title, validUntil: '2026-12-23', placeOfSupply: '06', siteAddress: 'Confirmed quote site', terms: 'Accepted terms',
+  const saved = await mutate('quote_save', { leadId, title, validUntil, placeOfSupply: '06', siteAddress: 'Confirmed quote site', terms: 'Accepted terms',
     items: [{ id: crypto.randomUUID(), description: title, hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }] });
   const quote = saved.data.quotations.find(row => row.title === title)!;
   return (await mutate('quote_issue', { id: quote.id })).data.quotations.find(row => row.id === quote.id)!;
+}
+
+// Model an issued record aging across midnight without changing the host clock.
+// This fixture-only bypass is confined to each rollback-only PGlite transaction.
+async function ageIssuedQuote(quoteId: string, validUntil: string) {
+  await setRole('postgres');
+  await db.exec('ALTER TABLE crm.quotations DISABLE TRIGGER quotations_guard');
+  try {
+    await db.query("UPDATE crm.quotations SET payload=jsonb_set(payload,'{validUntil}',to_jsonb($2::text)) WHERE id=$1", [quoteId, validUntil]);
+  } finally {
+    await db.exec('ALTER TABLE crm.quotations ENABLE TRIGGER quotations_guard');
+    await setRole('service_role');
+  }
 }
 
 describe('Supabase database authorization and atomic writes', { concurrency: false }, () => {
@@ -144,6 +160,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await db.exec(await readFile(new URL('../supabase/migrations/20261127062903_lead_expected_kw.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127065452_manual_lead_won.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127072310_won_lead_workorders.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261127082025_quotation_approval_status.sql', import.meta.url), 'utf8'));
   });
 
   beforeEach(async () => {
@@ -341,7 +358,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await addMember(ids.manager, 'manager', 'MANAGER');
     for (const actor of [ids.owner, ids.manager]) {
       const lead = (await mutate('lead_save', { title: `Manual Won ${actor}`, expectedKw: '5.5' }, actor)).data.leads.find(row => row.title === `Manual Won ${actor}`)!;
-      const quote = (await mutate('quote_save', { leadId: lead.id, title: 'Unaccepted draft', validUntil: '2026-12-23', items: [] }, actor)).data.quotations.find(row => row.leadId === lead.id)!;
+      const quote = (await mutate('quote_save', { leadId: lead.id, title: 'Unaccepted draft', validUntil: FUTURE_DATE, items: [] }, actor)).data.quotations.find(row => row.leadId === lead.id)!;
       const before = await read(actor);
       const statusResult = await mutate('lead_status', { id: lead.id, status: 'WON' }, actor);
       assert.equal(statusResult.data.leads.find(row => row.id === lead.id)?.status, 'WON');
@@ -531,7 +548,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     const customer = created.data.customers[0];
     await mutate('customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, email: customer.email, stateCode: customer.stateCode, address: 'Confirmed billing address' });
     const quote = (await mutate('quote_save', {
-      leadId: lead.id, title: 'System quotation', validUntil: '2026-12-23', placeOfSupply: '06', siteAddress: lead.siteAddress, terms: 'Agreed terms',
+      leadId: lead.id, title: 'System quotation', validUntil: FUTURE_DATE, placeOfSupply: '06', siteAddress: lead.siteAddress, terms: 'Agreed terms',
       items: [{ id: 'capacity-item', description: 'Solar installation', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }],
     })).data.quotations[0];
     const issued = (await mutate('quote_issue', { id: quote.id })).data.quotations[0];
@@ -565,8 +582,8 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     assert.equal(order.quoteId, null);
     assert.equal(order.snapshot, null);
     assert.equal(order.status, 'PLANNED');
-    assert.equal(order.number, 'SC/WO/2026-27/000001');
-    assert.equal(first.data.sequences['WO/2026-27'], 1);
+    assert.equal(order.number, `SC/${WORK_ORDER_KEY}/000001`);
+    assert.equal(first.data.sequences[WORK_ORDER_KEY], 1);
     assert.equal(first.data.revision, before.revision + 1);
     const retry = await commit(oldServer);
     assert.equal(retry.data.workorders.length, 1);
@@ -627,7 +644,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
       assert.deepEqual(linked.snapshot, accepted.data.quotations.find(row => row.id === quote.id));
       for (const key of ['id', 'number', 'leadId', 'owner', 'startDate', 'endDate', 'milestones', 'expectedKw', 'createdAt', 'automaticForLead'] as const) assert.deepEqual(linked[key], closed[key]);
       assert.equal(accepted.data.workorders.filter(row => row.leadId === lead.id).length, 1);
-      assert.equal(accepted.data.sequences['WO/2026-27'], before.sequences['WO/2026-27']);
+      assert.equal(accepted.data.sequences[WORK_ORDER_KEY], before.sequences[WORK_ORDER_KEY]);
     }
   });
 
@@ -653,10 +670,104 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     assert.equal(secondOrder.automaticForLead, false);
     assert.equal(secondOrder.status, 'PLANNED');
     assert.deepEqual(secondOrder.snapshot, accepted.data.quotations.find(row => row.id === secondQuote.id));
-    assert.equal(accepted.data.sequences['WO/2026-27'], 2);
+    assert.equal(accepted.data.sequences[WORK_ORDER_KEY], 2);
     assert.equal((await commit(oldServer)).data.workorders.length, 2);
     assert.equal((await mutate('quote_convert', { id: secondQuote.id })).data.workorders.length, 2);
     assert.equal((await mutate('lead_status', { id: lead.id, status: 'WON' })).data.workorders.length, 2);
+  });
+
+  test('Owner and Manager can expire and reopen one quotation without changing its scope, lead or work', async () => {
+    await bootstrap(); await addMember(ids.manager, 'manager', 'MANAGER');
+    const lead = (await mutate('lead_save', { title: 'Quotation status project' })).data.leads[0];
+    const quote = await issuedQuote(lead.id);
+    for (const actor of [ids.owner, ids.manager]) {
+      const before = await read(actor);
+      const pending = plan(before, 'quote_expire', { id: quote.id });
+      const expired = await commit(pending);
+      const saved = expired.data.quotations.find(row => row.id === quote.id)!;
+      assert.equal(saved.status, 'EXPIRED');
+      const oldScope = Object.fromEntries(Object.entries(before.quotations.find(row => row.id === quote.id)!).filter(([key]) => !['status', 'updatedAt'].includes(key)));
+      const newScope = Object.fromEntries(Object.entries(saved).filter(([key]) => !['status', 'updatedAt'].includes(key)));
+      assert.deepEqual(newScope, oldScope);
+      assert.deepEqual(expired.data.leads, before.leads); assert.deepEqual(expired.data.workorders, before.workorders);
+      assert.deepEqual(expired.data.sequences, before.sequences);
+      const retry = await commit(pending); assert.equal(retry.data.revision, expired.data.revision);
+      const reopened = await mutate('quote_reopen', { id: quote.id }, actor);
+      assert.equal(reopened.data.quotations.find(row => row.id === quote.id)?.status, 'ISSUED');
+      assert.deepEqual(reopened.data.leads, before.leads); assert.deepEqual(reopened.data.workorders, before.workorders);
+      assert.deepEqual(reopened.data.sequences, before.sequences);
+    }
+  });
+
+  test('quotation status SQL checks current roles and denies empty, bulk, forged-scope and unrelated writes', async () => {
+    await bootstrap();
+    for (const [name, role] of [['manager', 'MANAGER'], ['sales', 'SALES'], ['operations', 'OPERATIONS'], ['accountant', 'ACCOUNTANT'], ['viewer', 'VIEWER']] as const) await addMember(ids[name], name, role);
+    const lead = (await mutate('lead_save', { title: 'Protected approval project' })).data.leads[0];
+    const quote = await issuedQuote(lead.id);
+    const before = await read();
+    const expire = plan(before, 'quote_expire', { id: quote.id });
+    for (const actor of [ids.sales, ids.operations, ids.accountant, ids.viewer]) await rejectsSql(() => commit({ ...expire, actor }), 'PT403');
+    const empty = structuredClone(expire); empty.changes.upserts.quotations = [];
+    await rejectsSql(() => commit(empty), 'PT400');
+    const bulk = structuredClone(expire); bulk.changes.upserts.quotations.push(bulk.changes.upserts.quotations[0]);
+    await rejectsSql(() => commit(bulk), 'PT400');
+    const missing = structuredClone(expire); (missing.changes.upserts.quotations[0] as Record<string, unknown>).id = 'absent-quotation';
+    await rejectsSql(() => commit(missing), 'PT404');
+    for (const field of ['title', 'validUntil', 'acceptanceNote']) {
+      const forged = structuredClone(expire); (forged.changes.upserts.quotations[0] as Record<string, unknown>)[field] = field === 'validUntil' ? '2099-12-31' : 'Forged value';
+      await rejectsSql(() => commit(forged), 'PT400');
+    }
+    const unrelated = structuredClone(expire); unrelated.changes.upserts.leads = [{ ...lead, title: 'Forged lead change' }];
+    await rejectsSql(() => commit(unrelated), 'PT403');
+    for (const action of ['quote_save', 'quote_revise', 'quote_decline']) await rejectsSql(() => commit({ ...expire, action }), 'PT403');
+    assert.deepEqual(await read(), before);
+    const pendingManager = plan(await read(ids.manager), 'quote_expire', { id: quote.id });
+    await mutate('member_role', { userId: ids.manager, role: 'SALES' });
+    await rejectsSql(() => commit(pendingManager), 'PT403');
+    const expired = await mutate('quote_expire', { id: quote.id });
+    const reopen = plan(expired.data, 'quote_reopen', { id: quote.id });
+    for (const actor of [ids.sales, ids.operations, ids.accountant, ids.viewer]) await rejectsSql(() => commit({ ...reopen, actor }), 'PT403');
+    for (const action of ['quote_save', 'quote_revise', 'quote_issue']) await rejectsSql(() => commit({ ...reopen, action }), 'PT403');
+  });
+
+  test('database India-date expiry blocks overdue acceptance and reopening, including forged validity or acceptance time', async () => {
+    await bootstrap();
+    const lead = (await mutate('lead_save', { title: 'Aged approval project' })).data.leads[0];
+    const quote = await issuedQuote(lead.id);
+    const yesterday = await query<string>("SELECT (((clock_timestamp() at time zone 'Asia/Kolkata')::date)-1)::text AS result");
+    await ageIssuedQuote(quote.id, yesterday);
+    const before = await read();
+    const aged = before.quotations.find(row => row.id === quote.id)!;
+    const forged = emptyChanges(before);
+    forged.upserts.quotations = [{ ...aged, status: 'ACCEPTED', acceptedAt: `${yesterday}T00:00:00.000Z`, acceptanceNote: 'Forged backdated acceptance' }];
+    await rejectsSql(() => commit({ actor: ids.owner, expectedRevision: before.revision, requestId: crypto.randomUUID(), action: 'quote_accept', payloadHash: hash, changes: forged, message: 'Stale server acceptance' }), 'PT400');
+    assert.deepEqual(await read(), before);
+    const expired = await mutate('quote_expire', { id: quote.id });
+    const changes = emptyChanges(expired.data);
+    changes.upserts.quotations = [{ ...expired.data.quotations[0], status: 'ISSUED' }];
+    const reopen = { actor: ids.owner, expectedRevision: expired.data.revision, requestId: crypto.randomUUID(), action: 'quote_reopen', payloadHash: hash, changes, message: 'Expired-date reopen' };
+    await rejectsSql(() => commit(reopen), 'PT400');
+    (changes.upserts.quotations[0] as Record<string, unknown>).validUntil = FUTURE_DATE;
+    await rejectsSql(() => commit(reopen), 'PT400');
+    assert.deepEqual((await read()).quotations, expired.data.quotations);
+    assert.equal((await read()).workorders.length, 0);
+  });
+
+  test('valid-through-today quotation can reopen and accept, while accepted snapshots cannot be expired or reopened', async () => {
+    await bootstrap();
+    const today = await query<string>("SELECT ((clock_timestamp() at time zone 'Asia/Kolkata')::date)::text AS result");
+    const lead = (await mutate('lead_save', { title: 'Today approval project' })).data.leads[0];
+    const quote = await issuedQuote(lead.id, 'Valid today scope', today);
+    await mutate('quote_expire', { id: quote.id });
+    await mutate('quote_reopen', { id: quote.id });
+    const accepted = await mutate('quote_accept', { id: quote.id, acceptanceNote: 'Approved today' });
+    assert.equal(accepted.data.workorders.filter(row => row.quoteId === quote.id).length, 1);
+    for (const [action, status] of [['quote_expire', 'EXPIRED'], ['quote_reopen', 'ISSUED']] as const) {
+      const changes = emptyChanges(accepted.data); changes.upserts.quotations = [{ ...accepted.data.quotations[0], status }];
+      await rejectsSql(() => commit({ actor: ids.owner, expectedRevision: accepted.data.revision, requestId: crypto.randomUUID(), action, payloadHash: hash, changes, message: 'Illegal accepted status change' }), 'PT400');
+    }
+    assert.deepEqual((await read()).quotations, accepted.data.quotations);
+    assert.deepEqual((await read()).workorders, accepted.data.workorders);
   });
 
   test('a receipt cannot be reused for a different payload, action, or actor', async () => {
@@ -771,7 +882,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     const leadResult = await mutate('lead_save', { customerId, title: 'Synthetic renovation', siteAddress: 'Synthetic work site', stateCode: '06', value: '10000' });
     const leadId = leadResult.data.leads[0].id;
     const quoteResult = await mutate('quote_save', {
-      leadId, title: 'Synthetic quotation', validUntil: '2026-12-23', placeOfSupply: '06', siteAddress: 'Synthetic work site', terms: 'Synthetic agreed terms',
+      leadId, title: 'Synthetic quotation', validUntil: FUTURE_DATE, placeOfSupply: '06', siteAddress: 'Synthetic work site', terms: 'Synthetic agreed terms',
       items: [{ id: 'synthetic-item', description: 'Synthetic construction service', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }],
     });
     const quoteId = quoteResult.data.quotations[0].id;
