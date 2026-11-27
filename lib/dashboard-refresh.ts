@@ -2,6 +2,12 @@ import type { WorkspaceData } from './types';
 import type { OperationsData } from './operations-types';
 import { readJson } from './client-read.ts';
 
+export interface UnchangedWorkspace {
+  unchanged: true;
+  revision: number;
+  user: WorkspaceData['user'];
+}
+
 export interface DashboardSnapshot {
   workspace: WorkspaceData;
   operations: OperationsData | null;
@@ -22,9 +28,16 @@ const ACCESS_CHANGED = 'Your workspace access changed. Refresh or sign in again 
 const INCOMPLETE_RESPONSE = 'The server returned an incomplete overview. Please refresh.';
 
 /** One authenticated response supplies the workspace and its operations summary. */
-export async function readDashboardSnapshot(expected: ExpectedMember, options: { signal?: AbortSignal; jobId?: string } = {}): Promise<DashboardSnapshot> {
-  const url = options.jobId ? `/api/dashboard?job=${encodeURIComponent(options.jobId)}` : '/api/dashboard';
-  const { response, body } = await readJson<Partial<DashboardSnapshot> & { error?: string }>(url, options);
+export async function readDashboardSnapshot(expected: ExpectedMember, options: { signal?: AbortSignal; jobId?: string; knownWorkspace?: WorkspaceData } = {}): Promise<DashboardSnapshot> {
+  const known = options.knownWorkspace;
+  const query = new URLSearchParams();
+  if (options.jobId) query.set('job', options.jobId);
+  if (known?.user.active && expected.active && known.user.userId === expected.userId && known.user.role === expected.role
+    && Number.isSafeInteger(known.revision) && known.revision >= 0) query.set('sinceRevision', String(known.revision));
+  const params = query.toString();
+  const url = params ? `/api/dashboard?${params}` : '/api/dashboard';
+  type ResponseBody = Partial<Omit<DashboardSnapshot, 'workspace'>> & { workspace?: WorkspaceData | UnchangedWorkspace; error?: string };
+  const { response, body } = await readJson<ResponseBody>(url, { signal: options.signal });
   if (!response.ok) {
     const message = body && typeof body === 'object' && typeof body.error === 'string' ? body.error : '';
     throw new DashboardRefreshError(response.status === 401 ? 'Please sign in again to view your workspace.'
@@ -47,7 +60,21 @@ export async function readDashboardSnapshot(expected: ExpectedMember, options: {
   }
   if (operations && !operations.extension) throw new DashboardRefreshError(INCOMPLETE_RESPONSE, 503);
   if (options.jobId && operations && !Array.isArray(operations.extension.jobMaterialEntries)) throw new DashboardRefreshError('Refresh the job to load its stock history.', 503);
-  return { workspace, operations, operationsError: typeof body.operationsError === 'string' ? body.operationsError
+  let current: WorkspaceData;
+  if ('unchanged' in workspace) {
+    if (workspace.unchanged !== true || !query.has('sinceRevision') || !known || known.revision !== workspace.revision) {
+      throw new DashboardRefreshError(INCOMPLETE_RESPONSE, 503);
+    }
+    // Profile fields can change without a workspace revision. Fetch the full
+    // roster once so its display names, emails and ordering stay consistent.
+    if (known.user.name !== workspace.user.name || known.user.email !== workspace.user.email) {
+      return readDashboardSnapshot(expected, { ...options, knownWorkspace: undefined });
+    }
+    current = known;
+  } else {
+    current = workspace;
+  }
+  return { workspace: current, operations, operationsError: typeof body.operationsError === 'string' ? body.operationsError
     : operations ? '' : 'Some dashboard summaries could not be loaded. Use Refresh overview to try again.' };
 }
 

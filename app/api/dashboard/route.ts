@@ -11,7 +11,10 @@ export async function GET(request: Request) {
   const timing = createReadTiming();
   let response: Response;
   try {
-    const data = await getInitialWorkspace({ signal: request.signal, timing, jobId: new URL(request.url).searchParams.get('job') });
+    const query = new URL(request.url).searchParams;
+    const hint = query.get('sinceRevision');
+    const knownRevision = hint !== null && /^\d{1,16}$/.test(hint) && Number.isSafeInteger(Number(hint)) ? Number(hint) : undefined;
+    const data = await getInitialWorkspace({ signal: request.signal, timing, jobId: query.get('job'), knownRevision });
     response = Response.json({ ...data, operations: data.operations && paymentResponse(request, data.operations) }, { headers: PRIVATE_HEADERS });
   } catch (error) { response = errorResponse(error); }
   response.headers.set('Server-Timing', serverTiming(timing));

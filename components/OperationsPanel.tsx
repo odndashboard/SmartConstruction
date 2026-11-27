@@ -142,6 +142,8 @@ function OperationsWorkspace({ section, workspace, search, initialWorkOrderId, o
   }, []);
 
   const { userId, role, active } = workspace.user;
+  const knownWorkspace = useRef(workspace);
+  useEffect(() => { knownWorkspace.current = workspace; }, [workspace]);
   const jobId = order?.id;
   const refresh = useCallback(() => {
     readController.current?.abort();
@@ -150,7 +152,7 @@ function OperationsWorkspace({ section, workspace, search, initialWorkOrderId, o
     const sequence = ++readSequence.current;
     const read = async () => {
       if (onWorkspaceUpdate) {
-        const snapshot = await readDashboardSnapshot({ userId, role, active }, { signal: controller.signal, jobId });
+        const snapshot = await readDashboardSnapshot({ userId, role, active }, { signal: controller.signal, jobId, knownWorkspace: knownWorkspace.current });
         if (!mounted.current || sequence !== readSequence.current) return;
         onWorkspaceUpdate(snapshot.workspace);
         if (!snapshot.operations) throw new Error(snapshot.operationsError || 'Refresh the job to load stock.');

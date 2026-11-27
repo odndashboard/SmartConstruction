@@ -122,3 +122,110 @@ test('team and mutation snapshots preserve changed identities, current roles and
   assert.equal(mergeWorkspaceUpdate(other, saved), other);
   assert.equal(mergeWorkspaceUpdate(current, workspace({ ...owner, active: false }, 13)), current);
 });
+
+test('unchanged refresh reuses the same verified workspace and takes fresh operations, including a selected job', async t => {
+  const known = workspace(owner, 42);
+  const latest = operations();
+  latest.extension.jobMaterialEntries = [];
+  const mock = t.mock.method(globalThis, 'fetch', async (url: string) => {
+    assert.equal(url, '/api/dashboard?job=work-1&sinceRevision=42');
+    return Response.json({ workspace: { unchanged: true, revision: 42, user: owner }, operations: latest, operationsError: '' });
+  });
+  const next = await readDashboardSnapshot(owner, { knownWorkspace: known, jobId: 'work-1' });
+  assert.equal(next.workspace, known);
+  assert.deepEqual(next.operations, latest);
+  assert.equal(mock.mock.callCount(), 1);
+});
+
+test('full snapshots replace stale revisions and are accepted from older servers', async t => {
+  const latest = workspace(owner, 8);
+  const known = workspace(owner, 7);
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ workspace: latest, operations: null, operationsError: 'Retry operations' }));
+  const result = await readDashboardSnapshot(owner, { knownWorkspace: known });
+  assert.deepEqual(result.workspace, latest);
+  assert.equal(result.operationsError, 'Retry operations');
+});
+
+test('a same-revision profile change reads one full workspace with the latest user and roster ordering', async t => {
+  const known = workspace(owner, 42);
+  const colleague = { ...owner, userId: 'colleague', name: 'Middle name' };
+  known.members.push(colleague);
+  for (const profile of [{ ...owner, name: 'Z updated name' }, { ...owner, email: 'updated@example.invalid' }]) {
+    const updated = workspace(profile, 42);
+    updated.members = [colleague, profile];
+    const latest = operations(profile); latest.revision = 7; latest.extension.jobMaterialEntries = [];
+    const calls: string[] = [];
+    const mock = t.mock.method(globalThis, 'fetch', async (url: string) => {
+      calls.push(url);
+      return Response.json(calls.length === 1
+        ? { workspace: { unchanged: true, revision: 42, user: profile }, operations: null }
+        : { workspace: updated, operations: latest, operationsError: '' });
+    });
+    const next = await readDashboardSnapshot(owner, { knownWorkspace: known, jobId: 'work-1' });
+    assert.deepEqual(calls, ['/api/dashboard?job=work-1&sinceRevision=42', '/api/dashboard?job=work-1']);
+    assert.deepEqual(next.workspace, updated); assert.notEqual(next.workspace, known);
+    assert.deepEqual(next.operations, latest); assert.deepEqual(known.user, owner);
+    assert.deepEqual(known.members.map(member => member.userId), ['owner', 'colleague']);
+    mock.mock.restore();
+  }
+});
+
+test('profile fallback rejects denial, changed identity and another unexpected compact response without further retries', async t => {
+  const known = workspace(owner, 42), profile = { ...owner, name: 'Updated owner' };
+  const compact = { workspace: { unchanged: true, revision: 42, user: profile }, operations: null };
+  for (const denied of [401, 403, 'identity', 'compact'] as const) {
+    let calls = 0;
+    const mock = t.mock.method(globalThis, 'fetch', async (url: string) => {
+      calls++;
+      if (calls === 1) return Response.json(compact);
+      assert.equal(url, '/api/dashboard');
+      if (typeof denied === 'number') return new Response(new ReadableStream(), { status: denied });
+      return Response.json(denied === 'compact' ? compact
+        : { workspace: workspace({ ...profile, userId: 'other-user' }, 42), operations: null });
+    });
+    await assert.rejects(readDashboardSnapshot(owner, { knownWorkspace: known }), status(denied === 'compact' ? 503 : denied === 'identity' ? 403 : denied));
+    assert.equal(calls, 2);
+    mock.mock.restore();
+  }
+});
+
+test('the original cancellation signal still cancels the one full profile fallback', async t => {
+  const known = workspace(owner, 42), controller = new AbortController();
+  let started!: () => void;
+  const fallbackStarted = new Promise<void>(resolve => { started = resolve; });
+  let calls = 0, fallbackSignal: AbortSignal | undefined;
+  t.mock.method(globalThis, 'fetch', async (_url: string, init?: RequestInit) => {
+    calls++;
+    if (calls === 1) return Response.json({ workspace: { unchanged: true, revision: 42, user: { ...owner, name: 'Updated owner' } }, operations: null });
+    fallbackSignal = init?.signal ?? undefined;
+    started();
+    return new Promise<Response>(() => {});
+  });
+  const pending = readDashboardSnapshot(owner, { knownWorkspace: known, signal: controller.signal });
+  await fallbackStarted;
+  controller.abort(new DOMException('Cancelled profile refresh.', 'AbortError'));
+  await assert.rejects(pending, (error: unknown) => error instanceof DOMException && error.name === 'AbortError');
+  assert.equal(calls, 2); assert.equal(fallbackSignal?.aborted, true);
+});
+
+test('a compact response is rebound only to the exact requested revision, user and role', async t => {
+  const known = workspace(owner, 3);
+  let returned = { unchanged: true, user: owner, revision: 3 };
+  let requested = '';
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    requested = url;
+    return Response.json({ workspace: returned, operations: null });
+  });
+  await assert.rejects(readDashboardSnapshot(owner), status(503));
+  for (const invalid of [workspace({ ...owner, userId: 'previous' }, 3), workspace({ ...owner, role: 'SALES' }, 3),
+    workspace({ ...owner, active: false }, 3)]) {
+    await assert.rejects(readDashboardSnapshot(owner, { knownWorkspace: invalid }), status(503));
+    assert.equal(requested, '/api/dashboard');
+  }
+  returned = { ...returned, revision: 4 };
+  await assert.rejects(readDashboardSnapshot(owner, { knownWorkspace: known }), status(503));
+  returned = { ...returned, revision: 3, user: { ...owner, role: 'ACCOUNTANT' } };
+  await assert.rejects(readDashboardSnapshot(owner, { knownWorkspace: known }), status(403));
+  returned = { ...returned, user: { ...owner, active: false } };
+  await assert.rejects(readDashboardSnapshot(owner, { knownWorkspace: known }), status(403));
+});

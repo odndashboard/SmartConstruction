@@ -4,11 +4,12 @@ import { todayIST } from './finance';
 import { operationsRpc } from './operations-server';
 import { CRMError } from './server-actions';
 import type { OperationsData } from './operations-types';
+import type { UnchangedWorkspace } from './dashboard-refresh';
 import type { WorkspaceData } from './types';
 import { runServerRead, OPTIONAL_OPERATIONS_TIMEOUT_MS, type ServerReadOptions } from './server-read';
 
-export interface InitialWorkspace {
-  workspace: WorkspaceData;
+export interface InitialWorkspace<T extends WorkspaceData | UnchangedWorkspace = WorkspaceData> {
+  workspace: T;
   operations: OperationsData | null;
   operationsError: string;
 }
@@ -16,14 +17,19 @@ export interface InitialWorkspace {
 const OPERATIONS_UNAVAILABLE = 'Some dashboard summaries could not be loaded. Use Refresh overview to try again.';
 
 /** One verified identity, two parallel live reads, and no cross-request cache. */
-export async function getInitialWorkspace(options: ServerReadOptions & { jobId?: string | null } = {}): Promise<InitialWorkspace> {
+type DashboardReadOptions = ServerReadOptions & { jobId?: string | null };
+export function getInitialWorkspace(options?: DashboardReadOptions & { knownRevision?: never }): Promise<InitialWorkspace>;
+export function getInitialWorkspace(options: DashboardReadOptions & { knownRevision?: number }): Promise<InitialWorkspace<WorkspaceData | UnchangedWorkspace>>;
+export async function getInitialWorkspace(options: DashboardReadOptions & { knownRevision?: number } = {}): Promise<InitialWorkspace<WorkspaceData | UnchangedWorkspace>> {
   const jobId = options.jobId;
   if (jobId != null && !/^[A-Za-z0-9_-]{1,120}$/.test(jobId)) throw new CRMError('Choose a valid work order.');
   return runServerRead('dashboard', options, async read => {
     const identity = await read.stage('auth', signal => authenticate(signal));
-    const workspaceRead = read.stage('workspace', signal => operationsRpc<WorkspaceData>('crm_workspace_read', {
-      p_actor_id: identity.userId, p_full_audit: false,
-    }, signal));
+    const workspaceRead = read.stage('workspace', signal => options.knownRevision === undefined
+      ? operationsRpc<WorkspaceData>('crm_workspace_read', { p_actor_id: identity.userId, p_full_audit: false }, signal)
+      : operationsRpc<WorkspaceData | UnchangedWorkspace>('crm_workspace_refresh', {
+          p_actor_id: identity.userId, p_known_revision: options.knownRevision,
+        }, signal));
     const operationsRead = read.stage('operations', signal => operationsRpc<OperationsData>(jobId ? 'crm_job_materials_read' : 'crm_operations_v2_read', {
       p_actor_id: identity.userId, p_month: todayIST().slice(0, 7),
       ...(jobId ? { p_work_order_id: jobId } : {}),

@@ -107,6 +107,24 @@ test('financial overview preserves totals larger than the JavaScript safe intege
   assert.equal(result.operations?.expenses.allTimeTotals?.paidPaise, '19800000000000001');
 });
 
+test('follow-up counting ignores invalid and closed entries and keeps exact overdue and India-date boundaries', () => {
+  const data = workspace();
+  data.followups = [
+    followup('due-now', now.toISOString()),
+    followup('one-millisecond-late', new Date(now.getTime() - 1).toISOString()),
+    followup('one-millisecond-later', new Date(now.getTime() + 1).toISOString()),
+    followup('previous-India-day', '2026-11-23T23:59:59.999+05:30'),
+    followup('next-India-day', '2026-11-25T00:00:00+05:30'),
+    followup('invalid', 'not-a-date'),
+    followup('closed', '2026-11-24T03:00:00Z', 'DONE'),
+  ];
+  const before = structuredClone(data.followups);
+  const core = buildDashboardOverview(data, null, now).core;
+  assert.equal(core.followupsToday, 3);
+  assert.equal(core.overdueFollowups, 2);
+  assert.deepEqual(data.followups, before);
+});
+
 test('payment overview counts provisional accounts without turning unknown contract balances into debt', () => {
   const data = workspace(), ops = operations();
   ops.extension.paymentAccounts = [
@@ -207,6 +225,26 @@ test('material requests and procurement show only still-actionable records with 
   const result = buildDashboardOverview(data, ops, now).operations!;
   assert.deepEqual(result.materialRequests, { submitted: 1, approved: 1, open: 2 });
   assert.deepEqual(result.purchaseOrders, { open: 3, overdue: 1 });
+});
+
+test('assigned-member totals count each active person once and only at an active construction site', () => {
+  const data = workspace(), ops = operations();
+  ops.extension.sites = Array.from({ length: 300 }, (_, index) => ({ id: `site-${index}`, name: `Site ${index}`, kind: 'SITE',
+    system: false, active: index !== 299, address: '', workOrderId: null }));
+  ops.extension.sites.push({ id: 'store', name: 'Main store', kind: 'STORE', system: true, active: true, address: '', workOrderId: null });
+  ops.extension.assignments = [
+    { userId: owner.userId, siteId: 'site-298', updatedAt: now.toISOString() },
+    { userId: owner.userId, siteId: 'site-0', updatedAt: now.toISOString() },
+    { userId: employee.userId, siteId: 'site-299', updatedAt: now.toISOString() },
+    { userId: employee.userId, siteId: 'store', updatedAt: now.toISOString() },
+    { userId: employee.userId, siteId: 'missing', updatedAt: now.toISOString() },
+    { userId: removed.userId, siteId: 'site-298', updatedAt: now.toISOString() },
+  ];
+  const before = structuredClone(ops.extension);
+  assert.deepEqual(buildDashboardOverview(data, ops, now).operations?.sites, {
+    activeSites: 299, ownSite: { id: 'site-298', name: 'Site 298' }, shiftConfigured: false, assignedMembers: 1,
+  });
+  assert.deepEqual(ops.extension, before);
 });
 
 test('snapshot time determines India labels and stale month/day snapshots are not relabeled as current data', () => {

@@ -386,3 +386,26 @@ test('staff dashboard never returns a workspace or operations snapshot for a dea
   };
   await assert.rejects(() => getInitialWorkspace(), e => e.status === 403 && e.message === 'Use the dealer lead portal.');
 });
+
+test('a revision hint uses a verified conditional workspace read alongside fresh operations in one request', async () => {
+  const state = reset();
+  const marker = { unchanged: true, user: member(OWNER), revision: 12 };
+  state.rpc = (name, args) => name === 'crm_workspace_refresh' ? { data: marker, error: null } : resultFor(name, args);
+  const response = await dashboardGET(new Request('https://crm.example.test/api/dashboard?sinceRevision=12'));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.workspace, marker);
+  assert.equal(body.operations.user.userId, OWNER);
+  assert.equal(state.authCalls, 1);
+  assert.deepEqual(state.rpcCalls.map(call => call.name).sort(), ['crm_operations_v2_read', 'crm_workspace_refresh']);
+  assert.deepEqual(state.rpcCalls.find(call => call.name === 'crm_workspace_refresh').args, { p_actor_id: OWNER, p_known_revision: 12 });
+});
+
+test('an invalid revision hint retrieves a full workspace', async () => {
+  for (const invalid of ['-1','2.5','9007199254740992','']) {
+    const state = reset();
+    const response = await dashboardGET(new Request('https://crm.example.test/api/dashboard?sinceRevision='+invalid));
+    assert.equal(response.status, 200);
+    assert.ok(state.rpcCalls.some(call => call.name === 'crm_workspace_read'));
+  }
+});

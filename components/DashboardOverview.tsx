@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowUpRight, Building2, CalendarCheck2, CalendarClock, CheckCircle2, ChevronRight,
   CircleAlert, FileText, HardHat, IndianRupee, MapPin, Package,
@@ -73,6 +73,8 @@ function Shortcut({ icon: Icon, title, detail, onClick }: { icon: typeof Package
 
 export default function DashboardOverview({ workspace, navigate, onWorkspaceRefreshed, onRefreshError, initialOverview = null, onInitialOverviewUsed }: Props) {
   const identity = `${workspace.user.userId}:${workspace.user.role}:${workspace.user.active}`;
+  const knownWorkspace = useRef(workspace);
+  useEffect(() => { knownWorkspace.current = workspace; }, [workspace]);
   const bootstrap = useRef(initialOverview?.identity === identity ? initialOverview : null);
   const [read, setRead] = useState<ReadState>(() => initialOverview?.identity === identity
     ? { identity, data: initialOverview.data, loading: false, error: initialOverview.error }
@@ -86,7 +88,7 @@ export default function DashboardOverview({ workspace, navigate, onWorkspaceRefr
     pending.current = true;
     setRead(current => ({ identity, data: current.identity === identity ? current.data : null, loading: true, error: '' }));
     try {
-      const snapshot = await readDashboardSnapshot({ userId: workspace.user.userId, role: workspace.user.role, active: workspace.user.active }, { signal: controller.signal });
+      const snapshot = await readDashboardSnapshot({ userId: workspace.user.userId, role: workspace.user.role, active: workspace.user.active }, { signal: controller.signal, knownWorkspace: knownWorkspace.current });
       if (!mounted.current || next !== sequence.current) return;
       onWorkspaceRefreshed(snapshot.workspace);
       lastRead.current = Date.now();
@@ -130,7 +132,11 @@ export default function DashboardOverview({ workspace, navigate, onWorkspaceRefr
 
   const current = read.identity === identity ? read.data : null;
   const loading = read.identity !== identity || read.loading;
-  const summary = buildDashboardOverview(workspace, current);
+  // A valid snapshot fixes the as-of time. Loading/error-only renders can reuse
+  // its totals; missing or invalid snapshots still use the live clock each time.
+  const snapshotSummary = useMemo(() => current && Number.isFinite(new Date(current.serverTime).getTime())
+    ? buildDashboardOverview(workspace, current) : null, [workspace, current]);
+  const summary = snapshotSummary ?? buildDashboardOverview(workspace, current);
   const core = summary.core, operations = summary.operations;
   const owner = operations?.owner === true;
   const ownerCard = workspace.user.role === 'OWNER';

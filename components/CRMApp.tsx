@@ -89,6 +89,40 @@ function localInput(value?: string) {
 }
 function plusDays(days: number) { return todayIST(new Date(Date.now() + days * 86400000)); }
 function ownerName(data: WorkspaceData, id: string) { const member = data.members.find(m => m.userId === id); if (member) return member.name; return id && [...data.leads, ...data.followups, ...data.workorders].some(r => r.isDemo && r.owner === id) ? `${id} · example` : 'Unassigned'; }
+function indexLeadCustomers(customers: WorkspaceData['customers']) {
+  const index = new Map<string, Customer>();
+  for (const customer of customers) {
+    const id = customer.id;
+    if (!index.has(id)) index.set(id, customer);
+  }
+  return index;
+}
+function indexLeadOwners(members: WorkspaceData['members'], leads: Lead[], followups: FollowUp[], workorders: WorkOrder[]) {
+  const index = new Map<string, string>();
+  // Preserve the first matching member, including inactive historical owners.
+  for (const member of members) {
+    const id = member.userId;
+    if (!index.has(id)) index.set(id, member.name);
+  }
+  for (const records of [leads, followups, workorders]) {
+    for (const record of records) if (record.isDemo && record.owner && !index.has(record.owner)) index.set(record.owner, `${record.owner} · example`);
+  }
+  return index;
+}
+function useLeadViewLookup({ customers, members, leads, followups, workorders }: WorkspaceData) {
+  const customersById = useMemo(() => indexLeadCustomers(customers), [customers]);
+  const ownerNames = useMemo(() => indexLeadOwners(members, leads, followups, workorders), [members, leads, followups, workorders]);
+  return { customersById, ownerNames };
+}
+function groupLeadStages(leads: Lead[]) {
+  const groups = new Map<LeadStatus, Lead[]>();
+  for (const lead of leads) {
+    const status = lead.status;
+    const records = groups.get(status);
+    if (records) records.push(lead); else groups.set(status, [lead]);
+  }
+  return groups;
+}
 function assigneeValue(data: WorkspaceData, id: string) { return data.members.some(m => m.active && m.userId === id) ? id : ''; }
 function expectedKwInputValue(value?: number | null): string {
   if (value == null) return '';
@@ -412,7 +446,7 @@ function StatusTabs({ choices, filter, setFilter }: { choices: string[][]; filte
 type PermissionFlags = { commercial: boolean; approve: boolean; delivery: boolean; follow: boolean; owner: boolean; manageLeadStatus: boolean };
 type OpenModal = (modal: ModalState) => void;
 function Dashboard({ data, mutate, permissions: p, navigate, open, busy, onWorkspaceRefreshed, onRefreshError, initialOverview, onInitialOverviewUsed }: { data: WorkspaceData; mutate: Mutation; permissions: PermissionFlags; navigate: (s: Section, filter?: string) => void; open: OpenModal; busy: boolean; onWorkspaceRefreshed: (workspace: WorkspaceData) => void; onRefreshError: (message: string, status?: number) => void; initialOverview: OverviewBootstrap | null; onInitialOverviewUsed: () => void }) {
-  const pipeline = data.leads.filter(l => !['WON', 'LOST'].includes(l.status));
+  const pipeline = useMemo(() => data.leads.filter(l => !['WON', 'LOST'].includes(l.status)), [data.leads]);
   const next = data.followups.filter(f => f.status === 'OPEN').sort((a, b) => a.dueAt.localeCompare(b.dueAt)).slice(0, 4);
   const pending = data.quotations.filter(q => effectiveQuoteStatus(q) === 'ISSUED');
   const active = data.workorders.filter(w => !['COMPLETED', 'CANCELLED'].includes(w.status));
@@ -430,12 +464,16 @@ function Dashboard({ data, mutate, permissions: p, navigate, open, busy, onWorks
   </>;
 }
 function LeadBoard({ data, leads, open, commercial, manageLeadStatus, dashboard }: { data: WorkspaceData; leads: Lead[]; open: OpenModal; commercial: boolean; manageLeadStatus: boolean; dashboard: boolean }) {
+  const { customersById, ownerNames } = useLeadViewLookup(data);
+  const groups = useMemo(() => groupLeadStages(leads), [leads]);
   return <div className={`lead-board${dashboard ? ' dashboard-board' : ''}`}>{LEAD_STAGES.slice(0, 5).map(stage => {
-    const records = leads.filter(l => l.status === stage.value);
-    return <section className={`board-column stage-${stage.value.toLowerCase()}`} key={stage.value}><header><span className="stage-dot" /><h3>{stage.label}</h3><span className="stage-count">{records.length}</span>{commercial && <IconButton label={`Add lead`} onClick={() => open({ type: 'lead' })}><Plus size={14} /></IconButton>}</header><div className="board-cards">{(dashboard ? records.slice(0, 2) : records).map(lead => <article className="lead-card" key={lead.id}><div className="lead-card-tags"><span className={`priority-label priority-${lead.priority.toLowerCase()}`}><span />{lead.priority} priority</span><IconButton label={`Open ${lead.title}`} onClick={() => open({ type: 'lead_detail', id: lead.id })}><MoreHorizontal size={17} /></IconButton></div><button className="lead-card-title" onClick={() => open({ type: 'lead_detail', id: lead.id })}>{lead.title}</button><p className="lead-customer">{data.customers.find(c => c.id === lead.customerId)?.name || lead.contact}</p><span className="lead-location"><MapPin size={12} />{lead.location || stateLabel(lead.stateCode)}</span><strong className="lead-value">{lead.value ? formatINR(lead.value, true) : 'To be scoped'}</strong>{lead.expectedKw != null && <span className="lead-location">Expected: {lead.expectedKw} kW</span>}{manageLeadStatus && <button type="button" className="button button-secondary button-small lead-status-action" aria-label={`Change status of ${lead.title}`} onClick={() => open({ type: 'lead_status', id: lead.id })}><RefreshCw size={14} />Change status</button>}<footer><span className="lead-footer-date"><CalendarDays size={12} />{displayDate(lead.createdAt)}<DemoTag demo={lead.isDemo} /></span><Avatar small name={ownerName(data, lead.owner)} /></footer></article>)}{!records.length && <div className="board-empty"><span>No leads here yet</span>{commercial && <button onClick={() => open({ type: 'lead' })}><Plus size={13} />Add a lead</button>}</div>}{dashboard && records.length > 2 && <span className="board-more">+{records.length - 2} more opportunities</span>}</div></section>;
+    const records = groups.get(stage.value) || [];
+    return <section className={`board-column stage-${stage.value.toLowerCase()}`} key={stage.value}><header><span className="stage-dot" /><h3>{stage.label}</h3><span className="stage-count">{records.length}</span>{commercial && <IconButton label={`Add lead`} onClick={() => open({ type: 'lead' })}><Plus size={14} /></IconButton>}</header><div className="board-cards">{(dashboard ? records.slice(0, 2) : records).map(lead => <article className="lead-card" key={lead.id}><div className="lead-card-tags"><span className={`priority-label priority-${lead.priority.toLowerCase()}`}><span />{lead.priority} priority</span><IconButton label={`Open ${lead.title}`} onClick={() => open({ type: 'lead_detail', id: lead.id })}><MoreHorizontal size={17} /></IconButton></div><button className="lead-card-title" onClick={() => open({ type: 'lead_detail', id: lead.id })}>{lead.title}</button><p className="lead-customer">{customersById.get(lead.customerId)?.name || lead.contact}</p><span className="lead-location"><MapPin size={12} />{lead.location || stateLabel(lead.stateCode)}</span><strong className="lead-value">{lead.value ? formatINR(lead.value, true) : 'To be scoped'}</strong>{lead.expectedKw != null && <span className="lead-location">Expected: {lead.expectedKw} kW</span>}{manageLeadStatus && <button type="button" className="button button-secondary button-small lead-status-action" aria-label={`Change status of ${lead.title}`} onClick={() => open({ type: 'lead_status', id: lead.id })}><RefreshCw size={14} />Change status</button>}<footer><span className="lead-footer-date"><CalendarDays size={12} />{displayDate(lead.createdAt)}<DemoTag demo={lead.isDemo} /></span><Avatar small name={ownerNames.get(lead.owner) ?? 'Unassigned'} /></footer></article>)}{!records.length && <div className="board-empty"><span>No leads here yet</span>{commercial && <button onClick={() => open({ type: 'lead' })}><Plus size={13} />Add a lead</button>}</div>}{dashboard && records.length > 2 && <span className="board-more">+{records.length - 2} more opportunities</span>}</div></section>;
   })}</div>;
 }
-function LeadTable({ data, leads, open, manageLeadStatus }: { data: WorkspaceData; leads: Lead[]; open: OpenModal; manageLeadStatus: boolean }) { return <div className="panel table-container"><table><thead><tr><th>Project / customer</th><th>Stage</th><th>Expected kW</th><th>Expected value</th><th>Owner</th><th>Priority</th><th /></tr></thead><tbody>{leads.map(l => <tr key={l.id}><td><button className="table-title" onClick={() => open({ type: 'lead_detail', id: l.id })}>{l.title}</button><small>{data.customers.find(c => c.id === l.customerId)?.name} <DemoTag demo={l.isDemo} /></small></td><td><Badge status={l.status}>{leadLabel(l.status)}</Badge></td><td>{l.expectedKw != null ? `${l.expectedKw} kW` : '—'}</td><td className="money-cell">{formatINR(l.value)}</td><td><span className="owner-cell"><Avatar small name={ownerName(data, l.owner)} />{ownerName(data, l.owner)}</span></td><td><span className={`priority-label priority-${l.priority.toLowerCase()}`}><span />{l.priority}</span></td><td><div className="lead-row-actions">{manageLeadStatus && l.status !== 'WON' && <button type="button" className="button button-secondary button-small" aria-label={`Change status of ${l.title}`} onClick={() => open({ type: 'lead_status', id: l.id })}><RefreshCw size={14} />Change status</button>}<IconButton label={`Open ${l.title}`} onClick={() => open({ type: 'lead_detail', id: l.id })}><ArrowUpRight size={17} /></IconButton></div></td></tr>)}</tbody></table></div>; }
+function LeadTable({ data, leads, open, manageLeadStatus }: { data: WorkspaceData; leads: Lead[]; open: OpenModal; manageLeadStatus: boolean }) {
+  const { customersById, ownerNames } = useLeadViewLookup(data);
+  return <div className="panel table-container"><table><thead><tr><th>Project / customer</th><th>Stage</th><th>Expected kW</th><th>Expected value</th><th>Owner</th><th>Priority</th><th /></tr></thead><tbody>{leads.map(l => <tr key={l.id}><td><button className="table-title" onClick={() => open({ type: 'lead_detail', id: l.id })}>{l.title}</button><small>{customersById.get(l.customerId)?.name} <DemoTag demo={l.isDemo} /></small></td><td><Badge status={l.status}>{leadLabel(l.status)}</Badge></td><td>{l.expectedKw != null ? `${l.expectedKw} kW` : '—'}</td><td className="money-cell">{formatINR(l.value)}</td><td><span className="owner-cell"><Avatar small name={ownerNames.get(l.owner) ?? 'Unassigned'} />{ownerNames.get(l.owner) ?? 'Unassigned'}</span></td><td><span className={`priority-label priority-${l.priority.toLowerCase()}`}><span />{l.priority}</span></td><td><div className="lead-row-actions">{manageLeadStatus && l.status !== 'WON' && <button type="button" className="button button-secondary button-small" aria-label={`Change status of ${l.title}`} onClick={() => open({ type: 'lead_status', id: l.id })}><RefreshCw size={14} />Change status</button>}<IconButton label={`Open ${l.title}`} onClick={() => open({ type: 'lead_detail', id: l.id })}><ArrowUpRight size={17} /></IconButton></div></td></tr>)}</tbody></table></div>; }
 function FollowupRow({ item, data, open, canEdit, full = false }: { item: FollowUp; data: WorkspaceData; open: OpenModal; canEdit: boolean; full?: boolean }) {
   const Icon = item.channel === 'Email' ? Mail : item.channel === 'Site visit' ? MapPin : Phone;
   return <article className={`followup-row${full ? ' full' : ''}`}><span className={`followup-type ${item.channel === 'Site visit' ? 'visit' : ''}`}><Icon size={18} strokeWidth={1.7} /></span><div className="followup-content"><button onClick={() => open({ type: 'lead_detail', id: item.leadId })}>{item.title}</button><span>{data.leads.find(l => l.id === item.leadId)?.title}<DemoTag demo={item.isDemo} /></span><div className="followup-meta"><span><Clock3 size={12} />{todayIST(new Date(item.dueAt)) === todayIST() ? 'Today' : displayDate(item.dueAt)}, {displayTime(item.dueAt)}</span>{isOverdue(item) ? <span className="overdue-text">Overdue</span> : item.status !== 'OPEN' ? <span className="completed-text">{FOLLOW_LABELS[item.status]}</span> : null}</div>{full && <><small>Assigned to {ownerName(data, item.owner)}</small>{(item.outcome || item.notes) && <p className="followup-outcome">{item.outcome || item.notes}</p>}</>}</div>{canEdit && item.status === 'OPEN' && <div className="followup-actions">{full && <IconButton label="Edit follow-up" onClick={() => open({ type: 'followup', id: item.id })}><Pencil size={16} /></IconButton>}<IconButton label={`Complete ${item.title}`} className="complete-button" onClick={() => open({ type: 'followup_complete', id: item.id })}><Check size={17} /></IconButton></div>}{item.status === 'DONE' && <CheckCircle2 size={20} className="sage-text" />}</article>;

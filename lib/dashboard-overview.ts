@@ -64,13 +64,20 @@ export function buildDashboardOverview(workspace: WorkspaceData, operations: Ope
   const today = todayIST(instant), month = today.slice(0, 7);
   const openLeads = workspace.leads.filter(row => row.status !== 'WON' && row.status !== 'LOST');
   const pendingQuotes = workspace.quotations.filter(row => effectiveQuoteStatus(row, today) === 'ISSUED');
-  const openFollowups = workspace.followups.filter(row => row.status === 'OPEN');
+  let followupsToday = 0, overdueFollowups = 0;
+  const instantTime = instant.getTime();
+  for (const row of workspace.followups) {
+    if (row.status !== 'OPEN') continue;
+    const due = validInstant(row.dueAt);
+    if (!due) continue;
+    if (todayIST(due) === today) followupsToday++;
+    if (due.getTime() < instantTime) overdueFollowups++;
+  }
   const overview: DashboardOverviewSummary = {
     today, month, asOf: instant.toISOString(),
     core: {
       openLeads: openLeads.length, pipelinePaise: sumPaise(openLeads, row => row.value),
-      followupsToday: openFollowups.filter(row => { const due = validInstant(row.dueAt); return due !== null && todayIST(due) === today; }).length,
-      overdueFollowups: openFollowups.filter(row => { const due = validInstant(row.dueAt); return due !== null && due.getTime() < instant.getTime(); }).length,
+      followupsToday, overdueFollowups,
       pendingQuotations: pendingQuotes.length, pendingQuotationPaise: sumPaise(pendingQuotes, row => row.totals.total),
       activeWorkOrders: workspace.workorders.filter(row => row.status !== 'COMPLETED' && row.status !== 'CANCELLED').length,
       completedWorkOrders: workspace.workorders.filter(row => row.status === 'COMPLETED').length,
@@ -92,6 +99,7 @@ export function buildDashboardOverview(workspace: WorkspaceData, operations: Ope
 
   const activeMembers = new Set(workspace.members.filter(row => row.active).map(row => row.userId));
   const activeSites = operations.extension.sites.filter(row => row.active && row.kind === 'SITE');
+  const activeSiteIds = new Set(activeSites.map(row => row.id));
   const ownAssignment = operations.extension.assignments.find(row => row.userId === userId);
   const ownSite = activeSites.find(row => row.id === ownAssignment?.siteId);
   const attendance = operations.extension.attendanceCalendar.filter(row => row.workDate === today
@@ -123,7 +131,7 @@ export function buildDashboardOverview(workspace: WorkspaceData, operations: Ope
       activeSites: activeSites.length, ownSite: ownSite ? { id: ownSite.id, name: ownSite.name } : null,
       shiftConfigured: operations.extension.shiftRule.configured,
       assignedMembers: owner ? new Set(operations.extension.assignments.filter(row => activeMembers.has(row.userId)
-        && activeSites.some(site => site.id === row.siteId)).map(row => row.userId)).size : null,
+        && activeSiteIds.has(row.siteId)).map(row => row.userId)).size : null,
     },
     attendance: {
       scope: owner ? 'TEAM' : 'SELF', todayRecorded: attendance.length,
