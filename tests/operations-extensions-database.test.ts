@@ -380,7 +380,7 @@ describe('Operations extensions: real database rules and scoped workflows', { co
   });
 
   test('payments allocate FIFO with exact Owner-only totals, advances, cancellations and immutable void history', async () => {
-    const order = await workOrder(); assert.equal(order.snapshot.totals.total, 1180000);
+    const order = await workOrder(); assert.ok(order.snapshot); assert.equal(order.snapshot.totals.total, 1180000);
     const overdue = (await mutate('payment_installment_add', { workOrderId: order.id, title: 'First installment', dueDate: day(-1), amount: '4000' })).data.extension.paymentInstallments![0];
     const later = (await mutate('payment_installment_add', { workOrderId: order.id, title: 'Second installment', dueDate: day(10), amount: '4000' })).data.extension.paymentInstallments!.find(row => row.id !== overdue.id)!;
     await rejects(() => mutate('payment_installment_add', { workOrderId: order.id, title: 'Too much', dueDate: today, amount: '4000' }), 'PT409');

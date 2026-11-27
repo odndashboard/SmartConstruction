@@ -10,7 +10,7 @@ import ts from 'typescript';
 // The field components remain real; unrelated icons and formatting are simple stand-ins.
 const source = readFileSync(new URL('../components/CRMApp.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('CRMApp.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ['LeadForm', 'LeadStatusForm', 'SimpleForm', 'Field', 'MemberOptions', 'assigneeValue', 'expectedKwInputValue', 'LeadTable', 'LeadBoard', 'LeadDetail', 'DetailField'];
+const names = ['LeadForm', 'LeadStatusForm', 'SimpleForm', 'Field', 'MemberOptions', 'assigneeValue', 'expectedKwInputValue', 'workOrderLeadId', 'LeadTable', 'LeadBoard', 'LeadDetail', 'DetailField'];
 const declarations = names.map(name => {
   const node = ast.statements.find(item => ts.isFunctionDeclaration(item) && item.name?.text === name);
   assert.ok(node, `Missing component ${name}`);
@@ -35,7 +35,7 @@ const components = {};
 new Function('require', 'exports', ...Object.keys(helpers), compiled)(createRequire(import.meta.url), components, ...Object.values(helpers));
 
 const member = { userId: 'sales-test', name: 'Sales colleague', active: true };
-const data = { user: member, members: [member], customers: [], quotations: [], followups: [] };
+const data = { user: member, members: [member], customers: [], quotations: [], followups: [], workorders: [] };
 const baseLead = {
   id: 'lead-test', customerId: 'customer-existing', title: 'Solar installation', status: 'NEW',
   priority: 'Medium', value: 0, owner: member.userId, contact: 'Existing contact', phone: '1234567890',

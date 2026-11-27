@@ -44,8 +44,9 @@ export interface Quotation {
 }
 export interface Milestone { id: string; title: string; dueDate: string; status: 'PENDING'|'DONE'; completedAt?: string; }
 export interface WorkOrder {
-  id: string; quoteId: string; number: string; title: string; customerName: string; siteAddress: string;
-  owner: string; startDate: string; endDate: string; status: WorkStatus; snapshot: Quotation;
+  id: string; leadId?: string; quoteId: string | null; number: string; title: string; customerName: string; siteAddress: string;
+  owner: string; startDate: string; endDate: string; status: WorkStatus; snapshot: Quotation | null;
+  expectedKw?: number | null; automaticForLead?: boolean;
   milestones: Milestone[]; isDemo: boolean; createdAt: string; updatedAt: string;
 }
 export interface AuditEvent {

@@ -308,7 +308,7 @@ describe('commercial document workflow', () => {
     assert.deepEqual(data.sequences, counters);
     assert.deepEqual(order.snapshot, quote);
     assert.notEqual(order.snapshot, quote);
-    assert.notEqual(order.snapshot.items, quote.items);
+    assert.ok(order.snapshot); assert.notEqual(order.snapshot.items, quote.items);
     act(data, 'customer_save', { id: quote.customer!.id, name: 'Later master edit', address: 'New address' });
     assert.equal(order.customerName, 'Synthetic Customer');
     assert.equal(order.snapshot.totals.total, 106200);

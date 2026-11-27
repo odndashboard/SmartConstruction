@@ -42,8 +42,8 @@ export async function GET(request: Request) {
         rows: data.followups.map(r => [r.id, r.leadId, r.title, r.dueAt, r.channel, r.owner, r.status, r.outcome, r.isDemo]) },
       quotations: { headings: ['ID', 'Number', 'Title', 'Status', 'Revision', 'Valid until', 'Place of supply', 'Taxable INR', 'Total INR', 'Tax calculation needs setup', 'Example'],
         rows: data.quotations.map(r => [r.id, r.number, r.title, r.status, r.revision, r.validUntil, r.placeOfSupply, (r.totals.taxable / 100).toFixed(2), (r.totals.total / 100).toFixed(2), r.totals.needsConfig, r.isDemo]) },
-      workorders: { headings: ['ID', 'Number', 'Quotation ID', 'Title', 'Customer', 'Status', 'Owner user ID', 'Start date', 'End date', 'Total INR', 'Example'],
-        rows: data.workorders.map(r => [r.id, r.number, r.quoteId, r.title, r.customerName, r.status, r.owner, r.startDate, r.endDate, (r.snapshot.totals.total / 100).toFixed(2), r.isDemo]) },
+      workorders: { headings: ['ID', 'Number', 'Quotation ID', 'Title', 'Customer', 'Status', 'Owner user ID', 'Start date', 'End date', 'Accepted total INR', 'Example', 'Lead ID', 'Expected kW'],
+        rows: data.workorders.map(r => [r.id, r.number, r.quoteId, r.title, r.customerName, r.status, r.owner, r.startDate, r.endDate, r.snapshot ? (r.snapshot.totals.total / 100).toFixed(2) : '', r.isDemo, r.leadId ?? r.snapshot?.leadId, r.expectedKw]) },
       ...(operations ? {
         stock: { headings: ['ID', 'SKU', 'Material', 'Unit', 'Storage note', 'Received', 'Used net of returns', 'Returned', 'Adjustments', 'Remaining', 'Reorder level', 'Active'],
           rows: operations.stockItems.map(r => [r.id, r.sku, r.name, r.unit, r.location, exactQuantity(r.receivedMilli), exactQuantity(r.usedMilli), exactQuantity(r.returnedMilli || '0'), exactQuantity(r.adjustedMilli), (r.quantityMilli / 1000).toFixed(3), (r.minQuantityMilli / 1000).toFixed(3), r.active]) },

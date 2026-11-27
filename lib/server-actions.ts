@@ -346,7 +346,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
     case 'clear_demo': {
       // Keep any ancestor referenced by a real record, even if old imported data has mixed flags.
       const keepQuotes = new Set(data.quotations.filter(q => !q.isDemo).map(q => q.id));
-      for (const order of data.workorders.filter(o => !o.isDemo)) keepQuotes.add(order.quoteId);
+      for (const order of data.workorders.filter(o => !o.isDemo && o.quoteId)) keepQuotes.add(order.quoteId!);
       let grew = true;
       while (grew) { grew = false; for (const quote of data.quotations) if (keepQuotes.has(quote.id) && quote.revisionOf && !keepQuotes.has(quote.revisionOf)) { keepQuotes.add(quote.revisionOf); grew = true; } }
       const keepLeads = new Set(data.leads.filter(l => !l.isDemo).map(l => l.id));

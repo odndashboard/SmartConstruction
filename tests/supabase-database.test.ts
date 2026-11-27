@@ -664,7 +664,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     assert.equal(retry.data.workorders.filter(order => order.quoteId === accepted.id).length, 1);
     const order = first.data.workorders.find(item => item.quoteId === accepted.id)!;
     assert.deepEqual(order.snapshot, accepted);
-    assert.equal(order.snapshot.totals.total, accepted.totals.total);
+    assert.ok(order.snapshot); assert.equal(order.snapshot.totals.total, accepted.totals.total);
     assert.equal(order.snapshot.totals.total, 1_180_000);
 
     const duplicateChanges = emptyChanges(first.data);
