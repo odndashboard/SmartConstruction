@@ -5,6 +5,8 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
+import { WORK_LABELS, WORK_TRANSITIONS } from '../lib/work-order-status.ts';
+import { canRecordWorkOrderPayment } from '../lib/work-order-payments.ts';
 
 // Exercise the real work-order views without starting the dashboard or network clients.
 function loadFunctions(path, names, helpers = {}) {
@@ -29,7 +31,7 @@ const helpers = {
   Plus: blank, MoreHorizontal: blank, CalendarDays: blank, HardHat: () => null, ArrowUpRight: blank,
   Pencil: blank, Check: blank, CircleAlert: blank, FileText: blank, ChevronRight: blank,
   RefreshCw: blank, ArrowRight: blank, Printer: blank, CheckCircle2: blank, ChevronDown: blank,
-  WORK_LABELS: { PLANNED: 'Planned', ACTIVE: 'In progress', COMPLETED: 'Completed' },
+  WORK_LABELS, WORK_TRANSITIONS, canRecordWorkOrderPayment, IndianRupee: blank,
   QUOTE_LABELS: { ACCEPTED: 'Accepted' },
   ownerName: () => 'Project owner', displayDate: value => value || 'Not scheduled',
   formatINR: value => `₹${(value / 100).toFixed(2)}`, leadLabel: value => value, stateLabel: value => value,
@@ -37,8 +39,8 @@ const helpers = {
   customerForLead: () => ({ name: 'Customer from lead' }),
   Totals: ({ totals }) => React.createElement('span', null, `Approved quote ${totals.total}`),
 };
-const views = loadFunctions('../components/CRMApp.tsx', ['WorkCard', 'WorkDetail', 'LeadDetail', 'QuoteDetail', 'workOrderLeadId', 'DetailField'], helpers);
-const { canRecord } = loadFunctions('../components/PaymentsPanel.tsx', ['canRecord']);
+const views = loadFunctions('../components/CRMApp.tsx', ['WorkCard', 'WorkActions', 'WorkDetail', 'LeadDetail', 'QuoteDetail', 'workOrderLeadId', 'DetailField'], helpers);
+const canRecord = canRecordWorkOrderPayment;
 const lead = {
   id: 'lead-test', customerId: 'customer-test', title: 'Solar installation', status: 'WON',
   contact: 'Project contact', phone: '1234567890', email: '', expectedKw: 10.5, value: 99999,
@@ -58,7 +60,7 @@ const quote = {
 };
 const quoted = { ...unquoted, quoteId: quote.id, snapshot: quote };
 function workspace(workorders = [unquoted]) {
-  return { members: [], customers: [], leads: [lead], quotations: [quote], followups: [], workorders };
+  return { user: { role: 'OWNER' }, members: [], customers: [], leads: [lead], quotations: [quote], followups: [], workorders };
 }
 function render(name, props) { return renderToStaticMarkup(React.createElement(views[name], props)); }
 function children(element) {
@@ -94,6 +96,15 @@ test('existing quotation-backed work orders retain approved scope, pricing and d
   assert.doesNotMatch(html, /Awaiting accepted quotation/);
 });
 
+test('No GST work orders label the agreed total without claiming included tax', () => {
+  const snapshot = { ...quote, gstEnabled: false, totals: { ...quote.totals, mode: 'NO_GST' } };
+  const item = { ...quoted, snapshot };
+  const html = render('WorkDetail', { item, data: workspace([item]), delivery: false, busy: false, open() {}, mutate() {} });
+  assert.match(html, /Agreed total/);
+  assert.match(html, /₹123.45/);
+  assert.doesNotMatch(html, /incl\. GST/);
+});
+
 test('lead details open each associated work order', () => {
   const extra = { ...quoted, id: 'work-extra', number: 'WO/2026/002' };
   const data = workspace([unquoted, extra]);
@@ -106,6 +117,48 @@ test('lead details open each associated work order', () => {
   assert.equal(links.length, 2);
   links.forEach(link => link.props.onClick());
   assert.deepEqual(opened, [{ type: 'work_detail', id: unquoted.id }, { type: 'work_detail', id: extra.id }]);
+});
+
+test('completed orders show payment and status actions on the card and details, with role-specific access', () => {
+  const order = { ...quoted, status: 'COMPLETED' };
+  const data = workspace([order]);
+  for (const view of ['WorkCard', 'WorkDetail']) {
+    const html = render(view, { item: order, data, delivery: true, busy: false, open() {}, mutate() {} });
+    assert.match(html, /Record payment/);
+    assert.match(html, /Change status/);
+  }
+  for (const role of ['OWNER', 'MANAGER', 'OPERATIONS', 'ACCOUNTANT', 'SALES', 'VIEWER']) {
+    const opened = [];
+    const picker = views.WorkActions({ item: order, data: { ...data, user: { role } }, open: target => opened.push(target) });
+    for (const button of children(picker).filter(element => element.type === 'button')) button.props.onClick();
+    const expected = [];
+    if (role === 'OWNER') expected.push({ type: 'work_payment', id: order.id });
+    if (['OWNER', 'MANAGER', 'OPERATIONS'].includes(role)) expected.push({ type: 'work_status', id: order.id });
+    assert.deepEqual(opened, expected);
+  }
+  const cancelled = { ...order, status: 'CANCELLED' };
+  assert.equal(views.WorkActions({ item: cancelled, data: workspace([cancelled]), open() {} }), null);
+});
+
+test('changing the completed order in the status form saves only its ID and new status', async () => {
+  const order = { ...quoted, status: 'COMPLETED' };
+  const calls = [];
+  let selected = order.status;
+  let closed = false;
+  const { WorkStatusForm } = loadFunctions('../components/CRMApp.tsx', ['WorkStatusForm'], {
+    WORK_LABELS, WORK_TRANSITIONS, Field: wrapper, FormFooter: blank,
+    useState: () => [selected, next => { selected = next; }],
+  });
+  const props = { item: order, busy: false, close: () => { closed = true; }, mutate: async (...args) => { calls.push(args); return workspace([order]); } };
+  const form = WorkStatusForm(props);
+  const select = children(form).find(element => element.type === 'select');
+  assert.deepEqual(children(select).filter(element => element.type === 'option').map(element => element.props.value), ['COMPLETED', 'ACTIVE']);
+  await form.props.onSubmit({ preventDefault() {} });
+  assert.equal(calls.length, 0);
+  select.props.onChange({ target: { value: 'ACTIVE' } });
+  await WorkStatusForm(props).props.onSubmit({ preventDefault() {} });
+  assert.deepEqual(calls, [['workorder_save', { id: order.id, status: 'ACTIVE' }, false]]);
+  assert.equal(closed, true);
 });
 
 test('accepted quotations open their own linked work order and missing links retain safe recovery', () => {
@@ -137,8 +190,11 @@ test('each accepted quotation opens its own automatically generated scope', () =
   assert.deepEqual(opened, [{ type: 'work_detail', id: secondOrder.id }]);
 });
 
-test('payment entry remains unavailable until a work order has an accepted quotation snapshot', () => {
-  assert.equal(canRecord(workspace(), unquoted.id), false);
+test('payment entry supports advances for Won lead work orders and excludes cancelled or example records', () => {
+  assert.equal(canRecord(workspace(), unquoted.id), true);
   assert.equal(canRecord(workspace([quoted]), quoted.id), true);
   assert.equal(canRecord(workspace([{ ...quoted, status: 'CANCELLED' }]), quoted.id), false);
+  assert.equal(canRecord(workspace([{ ...unquoted, isDemo: true }]), unquoted.id), false);
+  assert.equal(canRecord({ ...workspace(), leads: [{ ...lead, status: 'NEW' }] }, unquoted.id), false);
+  assert.equal(canRecord({ ...workspace(), leads: [] }, unquoted.id), false);
 });

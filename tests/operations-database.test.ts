@@ -160,6 +160,7 @@ describe('Operations database permissions, privacy and atomic state', { concurre
     await db.exec(await readFile(new URL('../supabase/migrations/20261127065452_manual_lead_won.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127072310_won_lead_workorders.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127082025_quotation_approval_status.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261127101206_payments_optional_gst_reopen_work.sql', import.meta.url), 'utf8'));
   });
   beforeEach(async () => {
     await db.exec('BEGIN');

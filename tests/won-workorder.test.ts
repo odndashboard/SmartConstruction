@@ -81,6 +81,32 @@ test('late acceptance attaches approved scope without reopening Completed or Can
   }
 });
 
+test('delivery roles can reopen Completed using only its status and preserve the original order', () => {
+  for (const role of ['OWNER', 'MANAGER', 'OPERATIONS'] as const) {
+    const data = workspace(); const lead = addLead(data, true); const order = data.workorders[0];
+    accept(data, issue(data, lead.id).id);
+    act(data, 'workorder_save', { id: order.id, status: 'ACTIVE', owner: 'test-SALES', startDate: '2026-11-27', endDate: '2026-12-15' });
+    act(data, 'milestone_add', { workorderId: order.id, title: 'Delivery check' });
+    assert.throws(() => act(data, 'workorder_save', { id: order.id, status: 'COMPLETED' }), /milestones/);
+    act(data, 'milestone_complete', { workorderId: order.id, milestoneId: order.milestones[0].id });
+    act(data, 'workorder_save', { id: order.id, status: 'COMPLETED' });
+    const previous = structuredClone(order);
+    data.members.find(member => member.role === 'SALES')!.active = false;
+    data.user = data.members.find(member => member.role === role)!;
+    act(data, 'workorder_save', { id: order.id, status: 'ACTIVE' });
+    assert.deepEqual(order, { ...previous, status: 'ACTIVE', updatedAt: order.updatedAt });
+    assert.match(data.activity[0].description, /Completed → In progress/);
+    assert.equal(data.leads[0].status, 'WON');
+    for (const restrictedRole of ['ACCOUNTANT', 'SALES', 'VIEWER']) {
+      data.user = { ...data.members.find(member => member.role === restrictedRole)!, active: true };
+      assert.throws(() => act(data, 'workorder_save', { id: order.id, status: 'ON_HOLD' }), (error: unknown) => error instanceof CRMError && error.status === 403);
+    }
+    data.user = data.members[0];
+    act(data, 'workorder_save', { id: order.id, status: 'CANCELLED' });
+    assert.throws(() => act(data, 'workorder_save', { id: order.id, status: 'ACTIVE' }), /Closed work orders/);
+  }
+});
+
 test('every accepted scope automatically gets its own work order without duplicating its lead or rewriting previous approved scope', () => {
   const data = workspace(); const lead = addLead(data); const first = issue(data, lead.id); accept(data, first.id);
   const original = structuredClone(data.workorders[0]);

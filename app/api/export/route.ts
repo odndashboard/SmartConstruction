@@ -41,8 +41,8 @@ export async function GET(request: Request) {
         rows: data.customers.map(r => [r.id, r.name, r.contact, r.phone, r.email, r.address, r.stateCode, r.gstin, r.isDemo]) },
       followups: { headings: ['ID', 'Lead ID', 'Title', 'Due at', 'Channel', 'Owner user ID', 'Status', 'Outcome', 'Example'],
         rows: data.followups.map(r => [r.id, r.leadId, r.title, r.dueAt, r.channel, r.owner, r.status, r.outcome, r.isDemo]) },
-      quotations: { headings: ['ID', 'Number', 'Title', 'Status', 'Revision', 'Valid until', 'Place of supply', 'Taxable INR', 'Total INR', 'Tax calculation needs setup', 'Example'],
-        rows: data.quotations.map(r => [r.id, r.number, r.title, effectiveQuoteStatus(r, todayIST()), r.revision, r.validUntil, r.placeOfSupply, (r.totals.taxable / 100).toFixed(2), (r.totals.total / 100).toFixed(2), r.totals.needsConfig, r.isDemo]) },
+      quotations: { headings: ['ID', 'Number', 'Title', 'Status', 'Revision', 'Valid until', 'Place of supply', 'Taxable INR', 'Total INR', 'Tax calculation needs setup', 'Example', 'GST treatment'],
+        rows: data.quotations.map(r => [r.id, r.number, r.title, effectiveQuoteStatus(r, todayIST()), r.revision, r.validUntil, r.placeOfSupply, (r.totals.taxable / 100).toFixed(2), (r.totals.total / 100).toFixed(2), r.totals.needsConfig, r.isDemo, r.totals.mode === 'NO_GST' ? 'Not applied' : r.totals.mode]) },
       workorders: { headings: ['ID', 'Number', 'Quotation ID', 'Title', 'Customer', 'Status', 'Owner user ID', 'Start date', 'End date', 'Accepted total INR', 'Example', 'Lead ID', 'Expected kW'],
         rows: data.workorders.map(r => [r.id, r.number, r.quoteId, r.title, r.customerName, r.status, r.owner, r.startDate, r.endDate, r.snapshot ? (r.snapshot.totals.total / 100).toFixed(2) : '', r.isDemo, r.leadId ?? r.snapshot?.leadId, r.expectedKw]) },
       ...(operations ? {
@@ -56,8 +56,8 @@ export async function GET(request: Request) {
           const item = operations.stockItems.find(row => row.id === balance.itemId);
           return [item?.name, item?.sku, operations.extension.sites.find(site => site.id === balance.siteId)?.name, item?.unit, exactQuantity(String(balance.quantityMilli))];
         }) },
-        ...(operations.extension.paymentAccounts ? { payments: { headings: ['Work order', 'Title', 'Customer', 'Contract INR', 'Scheduled INR', 'Received INR', 'Outstanding INR', 'Overdue INR', 'Unallocated advance INR'],
-          rows: operations.extension.paymentAccounts.map(row => [row.number, row.title, row.customerName, exactMoney(row.contractPaise), exactMoney(row.scheduledPaise), exactMoney(row.receivedPaise), exactMoney(row.outstandingPaise), exactMoney(row.overduePaise), exactMoney(row.unallocatedPaise)]) } } : {}),
+        ...(operations.extension.paymentAccounts ? { payments: { headings: ['Work order', 'Title', 'Customer', 'Agreed contract INR', 'Scheduled INR', 'Received INR', 'Outstanding INR', 'Overdue INR', 'Unallocated advance INR', 'Excess received INR'],
+          rows: operations.extension.paymentAccounts.map(row => [row.number, row.title, row.customerName, row.contractPaise === null ? '' : exactMoney(row.contractPaise), exactMoney(row.scheduledPaise), exactMoney(row.receivedPaise), row.outstandingPaise === null ? '' : exactMoney(row.outstandingPaise), exactMoney(row.overduePaise), exactMoney(row.unallocatedPaise), exactMoney(row.overpaidPaise ?? '0')]) } } : {}),
       } : {}),
     };
     if (!Object.hasOwn(collections, moduleName)) throw new CRMError('Choose an available CRM export module.');

@@ -65,18 +65,20 @@ export function getTaxMode(supplierState:string, placeOfSupply:string): TaxMode 
   if (supplierState !== placeOfSupply) return 'IGST';
   return UTGST.has(supplierState)?'CGST_UTGST':'CGST_SGST';
 }
-export function computeQuote(inputs: QuoteItemInput[], supplierState: string, placeOfSupply: string): {items:QuoteItem[];totals:QuoteTotals} {
+export function computeQuote(inputs: QuoteItemInput[], supplierState: string, placeOfSupply: string, gstEnabled = true): {items:QuoteItem[];totals:QuoteTotals} {
   if (!Array.isArray(inputs) || inputs.length>100) throw new Error('A quotation supports up to 100 work items.');
-  const mode = getTaxMode(supplierState,placeOfSupply);
+  const configuredMode = getTaxMode(supplierState,placeOfSupply);
+  const mode: TaxMode = gstEnabled ? configuredMode : 'NO_GST';
   const sums = {subtotal:0n,discount:0n,taxable:0n,cgst:0n,sgst:0n,utgst:0n,igst:0n,total:0n};
   const items = inputs.map((input, index) => {
     const prefix=`Item ${index+1}`;
     const quantity=scaled(input.quantity,3,`${prefix} quantity`);
     const price=scaled(input.unitPrice,2,`${prefix} unit price`);
     const discount=scaled(input.discount === '' ? '0' : input.discount,2,`${prefix} discount`);
-    const rate=scaled(input.gstRate,2,`${prefix} GST rate`);
+    const rate=scaled(!gstEnabled && input.gstRate === '' ? '0' : input.gstRate,2,`${prefix} GST rate`);
     if (quantity<=0n || quantity>1_000_000_000_000n) throw new Error(`${prefix} quantity must be positive and within the supported limit.`);
     if (rate>10000n) throw new Error(`${prefix} GST rate must be between 0 and 100%.`);
+    if (!gstEnabled && rate !== 0n) throw new Error(`${prefix} has a GST rate. Apply GST or set the rate to zero.`);
     bounded(price,`${prefix} unit price`);
     const gross=roundHalfUp(quantity*price,1000n);
     bounded(gross,`${prefix} gross value`);
@@ -91,7 +93,7 @@ export function computeQuote(inputs: QuoteItemInput[], supplierState: string, pl
     const total=taxable+cgst+sgst+utgst+igst;
     sums.subtotal+=gross;sums.discount+=discount;sums.taxable+=taxable;
     sums.cgst+=cgst;sums.sgst+=sgst;sums.utgst+=utgst;sums.igst+=igst;sums.total+=total;
-    return {...input,gross:bounded(gross),taxable:bounded(taxable),cgst:bounded(cgst),sgst:bounded(sgst),utgst:bounded(utgst),igst:bounded(igst),total:bounded(total)};
+    return {...input,...(!gstEnabled ? {gstRate:'0'} : {}),gross:bounded(gross),taxable:bounded(taxable),cgst:bounded(cgst),sgst:bounded(sgst),utgst:bounded(utgst),igst:bounded(igst),total:bounded(total)};
   });
   const amounts = Object.fromEntries(Object.entries(sums).map(([key,value])=>[key,bounded(value,'Quotation total')])) as Omit<QuoteTotals,'mode'|'needsConfig'>;
   return {items,totals:{...amounts,mode,needsConfig:mode==='UNCONFIGURED'}};

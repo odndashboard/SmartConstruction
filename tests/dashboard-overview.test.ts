@@ -101,10 +101,23 @@ test('financial overview preserves totals larger than the JavaScript safe intege
   const result = buildDashboardOverview(data, ops, now);
   assert.equal(result.core.pipelinePaise, '9900000000000000');
   assert.equal(result.core.pendingQuotationPaise, '9900000000000000');
-  assert.deepEqual(result.operations?.payments, { workOrders: 2, contractPaise: '18014398509481986', receivedPaise: '16000000000000000',
-    outstandingPaise: '2014398509481986', overduePaise: '182', unallocatedPaise: '110' });
+  assert.deepEqual(result.operations?.payments, { workOrders: 2, unpricedWorkOrders: 0, contractPaise: '18014398509481986', receivedPaise: '16000000000000000',
+    outstandingPaise: '2014398509481986', overduePaise: '182', unallocatedPaise: '110', overpaidPaise: '0' });
   assert.equal(result.operations?.expenses.monthTotals?.submittedPaise, '9900000000000001');
   assert.equal(result.operations?.expenses.allTimeTotals?.paidPaise, '19800000000000001');
+});
+
+test('payment overview counts provisional accounts without turning unknown contract balances into debt', () => {
+  const data = workspace(), ops = operations();
+  ops.extension.paymentAccounts = [
+    { workOrderId: 'advance', number: 'WO/1', title: 'Manual Won', customerName: 'Actual contact', contractPaise: null, outstandingPaise: null,
+      scheduledPaise: '0', receivedPaise: '25000', overduePaise: '0', unallocatedPaise: '25000', overpaidPaise: '0' },
+    { workOrderId: 'priced', number: 'WO/2', title: 'Accepted scope', customerName: 'Actual contact', contractPaise: '10000', outstandingPaise: '0',
+      scheduledPaise: '10000', receivedPaise: '15000', overduePaise: '0', unallocatedPaise: '5000', overpaidPaise: '5000' },
+  ];
+  assert.deepEqual(buildDashboardOverview(data, ops, now).operations?.payments, {
+    workOrders: 2, unpricedWorkOrders: 1, contractPaise: '10000', receivedPaise: '40000', outstandingPaise: '0', overduePaise: '0', unallocatedPaise: '30000', overpaidPaise: '5000',
+  });
 });
 
 test('employee, Manager and Accountant summaries do not expose elevated financial, team or attendance aggregates', () => {

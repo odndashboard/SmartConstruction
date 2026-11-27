@@ -79,6 +79,28 @@ function reset() {
   return state;
 }
 beforeEach(reset);
+
+test('current clients receive won-order advances while already-open previous clients can still read numeric contract balances', async () => {
+  const state = reset();
+  const accounts = [{ workOrderId: 'agreed', contractPaise: '10000' }, { workOrderId: 'pending', contractPaise: null }];
+  const receipts = [{ workOrderId: 'agreed', amountPaise: 100 }, { workOrderId: 'pending', amountPaise: 200 }];
+  state.rpc = (name, args) => {
+    const response = resultFor(name, args);
+    if (name === 'crm_operations_v2_read') response.data.extension = { paymentAccounts: accounts, customerPayments: receipts };
+    return response;
+  };
+  for (const [path, handler] of [['dashboard', dashboardGET], ['operations', operationsGET]]) {
+    for (const current of [false, true]) {
+      const request = new Request(`https://crm.example.test/api/${path}`, { headers: current ? { 'X-CRM-Payment-Accounts': '2' } : {} });
+      const result = await handler(request);
+      assert.equal(result.status, 200);
+      const body = await result.json();
+      const { extension } = path === 'dashboard' ? body.operations : body;
+      assert.deepEqual(extension.paymentAccounts, current ? accounts : [accounts[0]]);
+      assert.deepEqual(extension.customerPayments, current ? receipts : [receipts[0]]);
+    }
+  }
+});
 after(() => {
   hooks.deregister(); delete globalThis[fixtureKey];
   for (const [key, value] of Object.entries(originalEnvironment)) {

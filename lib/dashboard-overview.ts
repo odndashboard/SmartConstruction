@@ -33,8 +33,8 @@ export interface DashboardOperationsSummary {
     monthTotals: ExpenseTotals | null; allTimeTotals: ExpenseTotals | null;
   };
   payments: {
-    workOrders: number; contractPaise: string; receivedPaise: string;
-    outstandingPaise: string; overduePaise: string; unallocatedPaise: string;
+    workOrders: number; unpricedWorkOrders: number; contractPaise: string; receivedPaise: string;
+    outstandingPaise: string; overduePaise: string; unallocatedPaise: string; overpaidPaise: string;
   } | null;
   materialRequests: { submitted: number; approved: number; open: number };
   purchaseOrders: { open: number; overdue: number } | null;
@@ -145,11 +145,13 @@ export function buildDashboardOverview(workspace: WorkspaceData, operations: Ope
     },
     payments: paymentAccounts === null ? null : {
       workOrders: paymentAccounts.length,
-      contractPaise: sumPaise(paymentAccounts, row => row.contractPaise),
+      unpricedWorkOrders: paymentAccounts.filter(row => row.contractPaise === null).length,
+      contractPaise: sumPaise(paymentAccounts, row => row.contractPaise ?? '0'),
       receivedPaise: sumPaise(paymentAccounts, row => row.receivedPaise),
-      outstandingPaise: sumPaise(paymentAccounts, row => row.outstandingPaise),
+      outstandingPaise: sumPaise(paymentAccounts, row => row.outstandingPaise ?? '0'),
       overduePaise: sumPaise(paymentAccounts, row => row.overduePaise),
       unallocatedPaise: sumPaise(paymentAccounts, row => row.unallocatedPaise),
+      overpaidPaise: sumPaise(paymentAccounts, row => row.overpaidPaise ?? '0'),
     },
     materialRequests: {
       submitted: requests.filter(row => row.status === 'SUBMITTED').length,

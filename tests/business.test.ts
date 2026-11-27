@@ -242,14 +242,12 @@ describe('commercial document workflow', () => {
     assert.deepEqual(data.sequences, {});
   });
 
-  test('issue requires customer address, reviewed classification and at least one item', () => {
+  test('issue requires customer address and at least one item', () => {
     const data = workspace(); const quote = addQuote(data);
     const customer = data.customers.find(row => row.id === data.leads.find(row => row.id === quote.leadId)!.customerId)!;
     customer.address = '';
     assert.throws(() => act(data, 'quote_issue', { id: quote.id }), CRMError);
     customer.address = 'Synthetic address';
-    quote.items[0].hsnSac = '';
-    assert.throws(() => act(data, 'quote_issue', { id: quote.id }), CRMError);
     quote.items = [];
     assert.throws(() => act(data, 'quote_issue', { id: quote.id }), CRMError);
     assert.equal(quote.status, 'DRAFT');

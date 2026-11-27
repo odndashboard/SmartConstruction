@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { computeQuote, validateRegistration, parseMoney, todayIST, financialYear, STATE_OPTIONS } from './finance.ts';
 import { createDemoData } from './demo.ts';
+import { WORK_LABELS, WORK_TRANSITIONS } from './work-order-status.ts';
 import type { WorkspaceData, Role, Lead, LeadStatus, Quotation, WorkOrder, WorkStatus, QuoteItemInput, Company } from './types';
 
 export class CRMError extends Error {
@@ -34,8 +35,8 @@ const workStatus = z.enum(['PLANNED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELL
 const owner = blank(200);
 const identity = z.object({ id }).strict();
 const item = z.object({
-  id, description: required(2000), hsnSac: text(8).default(''), quantity: required(30), unit: required(24),
-  unitPrice: required(30), discount: text(30).default('0'), gstRate: required(30),
+  id, description: required(2000), hsnSac: text(8).optional(), quantity: required(30), unit: required(24),
+  unitPrice: required(30), discount: text(30).optional(), gstRate: text(30).default(''),
 }).strict();
 // This dynamic action registry retains action-specific runtime validation.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- The dispatcher selects a heterogeneous schema by a validated action string; every payload is parsed by its strict schema before use.
@@ -49,7 +50,7 @@ const schemas: Record<string, z.ZodType<any>> = {
     channel: z.enum(['Call', 'WhatsApp', 'Email', 'Site visit', 'Other']), owner, notes: blank(5000) }).strict(),
   followup_complete: z.object({ id, outcome: required(5000) }).strict(),
   followup_cancel: identity,
-  quote_save: z.object({ id: id.optional(), leadId: id, title: required(), validUntil: date, placeOfSupply: state,
+  quote_save: z.object({ id: id.optional(), leadId: id, title: required(), validUntil: date, placeOfSupply: state, gstEnabled: z.boolean().optional(),
     siteAddress: blank(2000), terms: blank(12000), items: z.array(item).max(100) }).strict(),
   quote_issue: identity,
   quote_accept: z.object({ id, acceptanceNote: required(5000) }).strict(),
@@ -58,7 +59,10 @@ const schemas: Record<string, z.ZodType<any>> = {
   quote_reopen: identity,
   quote_revise: identity,
   quote_convert: identity,
-  workorder_save: z.object({ id, owner, startDate: optionalDate, endDate: optionalDate, status: workStatus }).strict(),
+  workorder_save: z.union([
+    z.object({ id, status: workStatus }).strict(),
+    z.object({ id, owner, startDate: optionalDate, endDate: optionalDate, status: workStatus }).strict(),
+  ]),
   milestone_add: z.object({ workorderId: id, title: required(), dueDate: optionalDate }).strict(),
   milestone_complete: z.object({ workorderId: id, milestoneId: id }).strict(),
   company_save: z.object({ name: required(), legalName: blank(), address: blank(2000), gstin: blank(15), stateCode: state,
@@ -79,10 +83,6 @@ const permission: Record<string, Role[]> = {
   quote_issue: APPROVE, quote_accept: APPROVE, quote_decline: APPROVE, quote_expire: APPROVE, quote_reopen: APPROVE, quote_convert: APPROVE,
   workorder_save: DELIVERY, milestone_add: DELIVERY, milestone_complete: DELIVERY,
   company_save: ['OWNER'], member_role: ['OWNER'], member_active: ['OWNER'], load_demo: ['OWNER'], clear_demo: ['OWNER'],
-};
-const workTransitions: Record<WorkStatus, WorkStatus[]> = {
-  PLANNED: ['ACTIVE', 'CANCELLED'], ACTIVE: ['ON_HOLD', 'COMPLETED', 'CANCELLED'],
-  ON_HOLD: ['ACTIVE', 'CANCELLED'], COMPLETED: [], CANCELLED: [],
 };
 function get<T extends { id: string }>(list: T[], value: string, label: string): T {
   const found = list.find(record => record.id === value);
@@ -112,8 +112,8 @@ function nextNumber(data: WorkspaceData, kind: 'Q' | 'WO', now: Date): string {
 function audit(data: WorkspaceData, action: string, type: string, entityId: string, description: string, now: string) {
   data.activity.unshift({ id: crypto.randomUUID(), actor: data.user.name, action, entityType: type, entityId, description, createdAt: now });
 }
-function calculate(items: QuoteItemInput[], supplierState: string, placeOfSupply: string) {
-  try { return computeQuote(items, supplierState, placeOfSupply); }
+function calculate(items: QuoteItemInput[], supplierState: string, placeOfSupply: string, gstEnabled = true) {
+  try { return computeQuote(items, supplierState, placeOfSupply, gstEnabled); }
   catch (error) { throw new CRMError(error instanceof Error ? error.message : 'Check quotation values.'); }
 }
 function validateGst(gstin: string, stateCode: string, required = false) {
@@ -249,8 +249,15 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       const existing = p.id ? get(data.quotations, p.id, 'Quotation') : undefined;
       if (existing) { assert(existing.status === 'DRAFT', 'Issued quotations are immutable. Create a revision.'); assert(existing.leadId === lead.id, 'A quotation cannot move to another lead.'); }
       assert(new Set(p.items.map((line: QuoteItemInput) => line.id)).size === p.items.length, 'Every work item must have a unique ID.');
-      const calculated = calculate(p.items, data.company.stateCode, p.placeOfSupply);
-      const record: Quotation = { ...p, ...calculated, id: existing?.id ?? crypto.randomUUID(), number: null, status: 'DRAFT',
+      // Older open clients submit explicit positive rates without the new flag.
+      // Edits always retain the saved treatment unless the user changes it.
+      const gstEnabled = p.gstEnabled ?? (existing ? existing.gstEnabled !== false : p.items.some((line: QuoteItemInput) => Number(line.gstRate) > 0));
+      const inputs: QuoteItemInput[] = p.items.map((line: QuoteItemInput) => {
+        const saved = existing?.items.find(item => item.id === line.id);
+        return { ...line, hsnSac: line.hsnSac ?? saved?.hsnSac ?? '', discount: line.discount ?? saved?.discount ?? '0' };
+      });
+      const calculated = calculate(inputs, data.company.stateCode, p.placeOfSupply, gstEnabled);
+      const record: Quotation = { ...p, ...calculated, gstEnabled, id: existing?.id ?? crypto.randomUUID(), number: null, status: 'DRAFT',
         revision: existing?.revision ?? 1, ...(existing?.revisionOf ? { revisionOf: existing.revisionOf } : {}),
         acceptanceNote: '', isDemo: lead.isDemo, createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
       if (existing) Object.assign(existing, record); else data.quotations.push(record);
@@ -264,13 +271,14 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       assert(lead.status !== 'LOST', 'Reopen the lost lead before issuing its quotation.');
       const customer = get(data.customers, lead.customerId, 'Customer');
       assert(data.company.legalName && data.company.address, 'Add the genuine company legal name and registered address in Settings first.');
-      validateGst(data.company.gstin, data.company.stateCode, true); validateGst(customer.gstin, customer.stateCode);
+      const gstEnabled = quote.gstEnabled !== false;
+      validateGst(data.company.gstin, data.company.stateCode, gstEnabled); validateGst(customer.gstin, customer.stateCode);
       assert(customer.address, 'Add the customer billing address before issue.');
-      assert(quote.siteAddress && quote.placeOfSupply, 'Add the project address and place of supply before issue.');
+      assert(quote.siteAddress, 'Add the project address before issue.');
+      assert(!gstEnabled || quote.placeOfSupply, 'Add the project place of supply before issue.');
       assert(quote.validUntil >= today, 'The quotation validity date has passed. Update the draft.');
       assert(quote.items.length > 0, 'Add at least one work item.');
-      assert(quote.items.every(line => /^\d{4,8}$/.test(line.hsnSac)), 'Each item requires a reviewed 4–8 digit HSN/SAC code.');
-      const calculated = calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply);
+      const calculated = calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply, gstEnabled);
       assert(!calculated.totals.needsConfig, 'Configure the supplier and project states before issue.');
       Object.assign(quote, calculated, { supplier: clone(data.company), customer: clone(customer), number: nextNumber(data, 'Q', now),
         status: 'ISSUED', issuedAt: stamp, updatedAt: stamp });
@@ -317,11 +325,12 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       assert(['ISSUED', 'DECLINED', 'EXPIRED'].includes(original.status), 'Only issued, declined or expired quotations can be revised.');
       assert(!data.quotations.some(q => q.revisionOf === original.id), 'A newer revision already exists.');
       const inputs = quoteInputs(original).map(line => ({ ...line, id: crypto.randomUUID() }));
-      const calculated = calculate(inputs, data.company.stateCode, original.placeOfSupply);
+      const gstEnabled = original.gstEnabled !== false;
+      const calculated = calculate(inputs, data.company.stateCode, original.placeOfSupply, gstEnabled);
       const extended = todayIST(new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000));
       const revised: Quotation = { id: crypto.randomUUID(), leadId: original.leadId, number: null, title: original.title,
         validUntil: original.validUntil > extended ? original.validUntil : extended, placeOfSupply: original.placeOfSupply,
-        siteAddress: original.siteAddress, terms: original.terms, ...calculated, status: 'DRAFT', revision: original.revision + 1,
+        siteAddress: original.siteAddress, terms: original.terms, ...calculated, gstEnabled, status: 'DRAFT', revision: original.revision + 1,
         revisionOf: original.id, acceptanceNote: '', isDemo: original.isDemo, createdAt: stamp, updatedAt: stamp };
       original.status = 'SUPERSEDED'; original.updatedAt = stamp; data.quotations.push(revised);
       audit(data, action, 'quotation', revised.id, `Created revision ${revised.revision} of ${original.number}`, stamp);
@@ -337,12 +346,22 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       return `Work order ${record.number} ready.`;
     }
     case 'workorder_save': {
-      const order = get(data.workorders, p.id, 'Work order'); assertOpenOrder(order); checkOwner(data, p.owner);
-      assert(p.status === order.status || workTransitions[order.status].includes(p.status), 'That work-order status change is not allowed.');
-      assert(!p.startDate || !p.endDate || p.endDate >= p.startDate, 'End date cannot precede start date.');
+      const order = get(data.workorders, p.id, 'Work order');
+      const previous = order.status;
+      const statusOnly = !('owner' in p);
+      if (!(statusOnly && previous === 'COMPLETED' && p.status === 'ACTIVE')) assertOpenOrder(order);
+      const status: WorkStatus = p.status;
+      assert(status === previous || WORK_TRANSITIONS[previous].includes(status), 'That work-order status change is not allowed.');
       assert(p.status !== 'COMPLETED' || order.milestones.every(m => m.status === 'DONE'), 'Complete the pending milestones before closing this work order.');
-      Object.assign(order, { owner: p.owner, startDate: p.startDate, endDate: p.endDate, status: p.status, updatedAt: stamp });
-      audit(data, action, 'workorder', order.id, `Updated work order ${order.number}`, stamp);
+      if (!statusOnly) {
+        checkOwner(data, p.owner);
+        assert(!p.startDate || !p.endDate || p.endDate >= p.startDate, 'End date cannot precede start date.');
+        Object.assign(order, { owner: p.owner, startDate: p.startDate, endDate: p.endDate });
+      }
+      order.status = status;
+      order.updatedAt = stamp;
+      const description = status === previous ? `Updated work order ${order.number}` : `${order.number}: ${WORK_LABELS[previous]} → ${WORK_LABELS[status]}`;
+      audit(data, action, 'workorder', order.id, description, stamp);
       return 'Work order updated.';
     }
     case 'milestone_add': {
@@ -364,7 +383,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       validateGst(p.gstin, p.stateCode);
       data.company = { ...p, currency: 'INR', timeZone: 'Asia/Kolkata' } as Company;
       for (const quote of data.quotations.filter(q => q.status === 'DRAFT')) {
-        Object.assign(quote, calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply), { updatedAt: stamp });
+        Object.assign(quote, calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply, quote.gstEnabled !== false), { updatedAt: stamp });
       }
       audit(data, action, 'company', '1', 'Updated company registration and contact settings', stamp);
       return 'Company settings saved. Issued documents remain unchanged.';

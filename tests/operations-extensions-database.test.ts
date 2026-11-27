@@ -16,7 +16,7 @@ const ids = {
   anonymous: '20000000-0000-4000-8000-000000000009', banned: '20000000-0000-4000-8000-000000000010',
   accountant: '20000000-0000-4000-8000-000000000011',
 };
-const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql', '20261127072310_won_lead_workorders.sql', '20261127082025_quotation_approval_status.sql'];
+const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql', '20261127072310_won_lead_workorders.sql', '20261127082025_quotation_approval_status.sql', '20261127101206_payments_optional_gst_reopen_work.sql'];
 let db: PGlite;
 let today: string;
 let month: string;
@@ -379,14 +379,20 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     assert.equal(expanded.number, 'SC/PO/1000000');
   });
 
-  test('unpriced Won work stays out of payment accounts and rejects payments until a real quote is accepted', async () => {
+  test('unpriced Won work records exact advances and preserves receipts when a smaller real quote is accepted', async () => {
     const created = await core('lead_save', { title: 'Unpriced planned project', status: 'WON', expectedKw: '6.75', stateCode: '06' });
     const lead = created.data.leads[0]; const planned = created.data.workorders[0];
     assert.equal(planned.snapshot, null);
-    assert.deepEqual((await read()).extension.paymentAccounts, []);
-    await rejects(() => mutate('payment_record', { workOrderId: planned.id, paymentDate: today, amount: '1', method: 'CASH' }), 'PT409');
+    const initial = (await read()).extension.paymentAccounts!;
+    assert.equal(initial.length, 1);
+    assert.deepEqual([initial[0].contractPaise, initial[0].outstandingPaise, initial[0].receivedPaise, initial[0].overpaidPaise], [null, null, '0', '0']);
+    const req = request('payment_record', { workOrderId: planned.id, paymentDate: today, amount: '12000.01', method: 'BANK', reference: 'Unpriced advance' }, (await read()).revision);
+    await commit(req);
+    await commit(req); // A retry must not collect the advance twice.
+    const advance = (await read()).extension.customerPayments!;
+    assert.equal(advance.length, 1); assert.equal(advance[0].amountPaise, 1200001);
+    assert.deepEqual([(await read()).extension.paymentAccounts![0].contractPaise, (await read()).extension.paymentAccounts![0].outstandingPaise], [null, null]);
     await rejects(() => mutate('payment_installment_add', { workOrderId: planned.id, title: 'Unagreed amount', dueDate: today, amount: '1' }), 'PT409');
-    assert.deepEqual((await read()).extension.customerPayments, []);
     const customer = created.data.customers.find(row => row.id === lead.customerId)!;
     await core('customer_save', { id: customer.id, name: customer.name, address: 'Confirmed billing address', stateCode: '06' });
     await core('company_save', { name: 'Smart construction', legalName: 'Test contractor', address: 'Supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: '' });
@@ -397,9 +403,49 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     assert.equal(accepted.data.workorders.length, 1); assert.equal(accepted.data.workorders[0].id, planned.id);
     const accounts = (await read()).extension.paymentAccounts!;
     assert.equal(accounts.length, 1); assert.equal(accounts[0].workOrderId, planned.id); assert.equal(accounts[0].contractPaise, '1180000');
-    await mutate('payment_record', { workOrderId: planned.id, paymentDate: today, amount: '1', method: 'CASH' });
-    assert.equal((await read()).extension.paymentAccounts![0].receivedPaise, '100');
+    assert.deepEqual([accounts[0].receivedPaise, accounts[0].outstandingPaise, accounts[0].overpaidPaise], ['1200001', '0', '20001']);
+    assert.deepEqual((await read()).extension.customerPayments, advance);
+    await rejects(() => mutate('payment_record', { workOrderId: planned.id, paymentDate: today, amount: '0.01', method: 'CASH' }), 'PT409');
+    await mutate('payment_installment_add', { workOrderId: planned.id, title: 'Now priced', dueDate: today, amount: '11800' });
+    assert.equal((await read()).extension.paymentInstallments![0].paidPaise, '1180000');
+    await mutate('payment_void', { id: advance[0].id, reason: 'Correct the original receipt' });
+    const corrected = (await read()).extension.paymentAccounts![0];
+    assert.deepEqual([corrected.receivedPaise, corrected.outstandingPaise, corrected.overpaidPaise], ['0', '1180000', '0']);
     assert.equal((await read(ids.accountant)).extension.paymentAccounts, null);
+  });
+
+  test('unquoted advances preserve Owner-only access, per-payment bounds and cancellation rules', async () => {
+    const created = await core('lead_save', { title: 'Owner-managed advance', status: 'WON' });
+    const order = created.data.workorders[0];
+    const payload = { workOrderId: order.id, paymentDate: today, amount: '0.01', method: 'CASH' };
+    for (const actor of [ids.manager, ids.sales, ids.operations, ids.accountant, ids.viewer]) {
+      await rejects(() => mutate('payment_record', payload, actor), 'PT403');
+      assert.equal((await read(actor)).extension.paymentAccounts, null);
+      assert.equal((await exported(actor)).extension.customerPayments, null);
+    }
+    for (const amount of ['0', '-1', '1.001', '90000000000.01', 'NaN']) {
+      await rejects(() => mutate('payment_record', { ...payload, amount }), 'PT400');
+    }
+    await rejects(() => mutate('payment_record', { ...payload, paymentDate: day(1) }), 'PT400');
+    await rejects(() => mutate('payment_record', { ...payload, workOrderId: crypto.randomUUID() }), 'PT404');
+    await mutate('payment_record', { ...payload, amount: '90000000000' });
+    await mutate('payment_record', { ...payload, amount: '90000000000' });
+    assert.equal((await read()).extension.paymentAccounts![0].receivedPaise, '18000000000000');
+    await core('workorder_save', { id: order.id, status: 'CANCELLED' });
+    await rejects(() => mutate('payment_record', payload), 'PT409');
+    const cancelled = (await read()).extension.paymentAccounts![0];
+    assert.deepEqual([cancelled.contractPaise, cancelled.outstandingPaise, cancelled.receivedPaise], [null, null, '18000000000000']);
+    const paid = (await read()).extension.customerPayments![0];
+    await mutate('payment_void', { id: paid.id, reason: 'Cancelled work receipt correction' });
+    assert.equal((await read()).extension.paymentAccounts![0].receivedPaise, '9000000000000');
+    await role('postgres');
+    await rejects(() => db.query('UPDATE crm.customer_payments SET amount_paise=0 WHERE id=$1', [paid.id]), 'PT403');
+    await role('service_role');
+    await core('load_demo', {});
+    const demos = (await query<WorkspaceData>('SELECT public.crm_workspace_read($1::uuid,true) AS result', [ids.owner])).workorders.filter(row => row.isDemo);
+    assert.ok(demos.length>0);
+    await rejects(() => mutate('payment_record', { ...payload, workOrderId: demos[0].id }), 'PT404');
+    assert.ok((await read()).extension.paymentAccounts!.every(row => !demos.some(demo => demo.id===row.workOrderId)));
   });
 
   test('payments allocate FIFO with exact Owner-only totals, advances, cancellations and immutable void history', async () => {

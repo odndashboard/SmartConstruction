@@ -2,7 +2,7 @@ export type Role = 'OWNER' | 'MANAGER' | 'SALES' | 'OPERATIONS' | 'ACCOUNTANT' |
 export type LeadStatus = 'NEW' | 'CONTACTED' | 'SITE_VISIT' | 'QUOTED' | 'NEGOTIATION' | 'WON' | 'LOST';
 export type QuoteStatus = 'DRAFT' | 'ISSUED' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'SUPERSEDED';
 export type WorkStatus = 'PLANNED' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED';
-export type TaxMode = 'CGST_SGST' | 'CGST_UTGST' | 'IGST' | 'UNCONFIGURED';
+export type TaxMode = 'CGST_SGST' | 'CGST_UTGST' | 'IGST' | 'UNCONFIGURED' | 'NO_GST';
 
 export interface Company {
   name: string; legalName: string; address: string; gstin: string; stateCode: string;
@@ -37,6 +37,8 @@ export interface QuoteTotals {
   utgst: number; igst: number; total: number; mode: TaxMode; needsConfig: boolean;
 }
 export interface Quotation {
+  /** Absent on historical quotations, whose original GST treatment is retained. */
+  gstEnabled?: boolean;
   id: string; leadId: string; number: string|null; title: string; validUntil: string;
   placeOfSupply: string; siteAddress: string; terms: string; items: QuoteItem[]; totals: QuoteTotals;
   status: QuoteStatus; revision: number; revisionOf?: string; supplier?: Company; customer?: Customer;

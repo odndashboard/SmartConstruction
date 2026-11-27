@@ -1,3 +1,5 @@
+import { PAYMENT_ACCOUNT_HEADERS } from './payment-response.ts';
+
 /** A read must finish both its request and JSON body before its deadline. */
 export const CLIENT_READ_TIMEOUT_MS = 15_000;
 
@@ -30,7 +32,7 @@ export async function readJson<T>(url: string, { signal, timeoutMs = CLIENT_READ
     }, timeoutMs);
   });
   const read = async () => {
-    const response = await fetch(url, { method: 'GET', credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+    const response = await fetch(url, { method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: PAYMENT_ACCOUNT_HEADERS, signal: controller.signal });
     // Access has already failed. Let callers discard private data immediately,
     // even if an intermediary returned an HTML or stalled error body.
     if (response.status === 401 || response.status === 403) {

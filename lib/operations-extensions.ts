@@ -62,8 +62,9 @@ export interface PaymentInstallment {
 }
 export interface PaymentAccount {
   workOrderId: string; number: string; title: string; customerName: string;
-  contractPaise: string; scheduledPaise: string; receivedPaise: string;
-  outstandingPaise: string; overduePaise: string; unallocatedPaise: string;
+  contractPaise: string | null; scheduledPaise: string; receivedPaise: string;
+  outstandingPaise: string | null; overduePaise: string; unallocatedPaise: string;
+  overpaidPaise?: string;
 }
 export interface ExpenseReceipt {
   id: string; expenseId: string; fileName: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf';

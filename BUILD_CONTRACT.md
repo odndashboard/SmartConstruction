@@ -41,7 +41,7 @@ Business actions: `customer_save`, `lead_save`, `lead_status`, `followup_save`, 
 - Issued quotations freeze the commercial parties, scope, rates and amounts.
 - Accepting a quotation marks its existing lead Won and links exactly one work order to that quotation.
 - Marking a lead Won creates one planned work order for that lead. Repeated saves reuse it.
-- A work order can be planned before a quote is accepted. Payment tracking starts when the order has an accepted quotation snapshot, which freezes the agreed amount.
+- A Won work order can receive customer advances before quotation acceptance. Acceptance freezes its agreed amount and credits the receipts already recorded against that order.
 - Business record IDs, document numbers and historical snapshots must survive any explicit data migration.
 
 ## Deployment

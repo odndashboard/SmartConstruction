@@ -11,6 +11,7 @@ import type { Member, WorkspaceData } from '@/lib/types';
 import { todayIST } from '@/lib/finance';
 import { saveTextFile } from '@/lib/native-platform';
 import { readJson } from '@/lib/client-read';
+import { PAYMENT_ACCOUNT_HEADERS } from '@/lib/payment-response';
 import type { ExpenseReceipt } from '@/lib/operations-extensions';
 import {
   EXPENSE_CATEGORIES, type AttendanceRecord, type AttendanceStatus, type Expense,
@@ -27,7 +28,7 @@ const StockAdvanced = dynamic(() => import('./StockAdvanced'), { loading: Sectio
 const PaymentsPanel = dynamic(() => import('./PaymentsPanel'), { loading: SectionLoading });
 const ExpenseReceipts = dynamic(() => import('./ExpenseReceipts'), { loading: () => <p className="muted" role="status">Loading receipt controls…</p> });
 
-type Props = { section: OperationsSection; workspace: WorkspaceData; search: string };
+type Props = { section: OperationsSection; workspace: WorkspaceData; search: string; initialWorkOrderId?: string };
 type Editor =
   | { kind: 'item'; item?: StockItem }
   | { kind: 'movement'; item?: StockItem }
@@ -112,7 +113,7 @@ export default function OperationsPanel(props: Props) {
   return <OperationsWorkspace key={props.section} {...props} />;
 }
 
-function OperationsWorkspace({ section, workspace, search }: Props) {
+function OperationsWorkspace({ section, workspace, search, initialWorkOrderId }: Props) {
   const [month, setMonth] = useState(() => todayIST().slice(0, 7));
   const [data, setData] = useState<OperationsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -207,7 +208,7 @@ function OperationsWorkspace({ section, workspace, search }: Props) {
     try {
       const response = await fetch('/api/operations', {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request),
+        headers: { 'Content-Type': 'application/json', ...PAYMENT_ACCOUNT_HEADERS }, body: JSON.stringify(request),
       });
       const result = await response.json() as { data?: OperationsData; message?: string; error?: string };
       if (!mounted.current) return false;
@@ -261,7 +262,7 @@ function OperationsWorkspace({ section, workspace, search }: Props) {
       {section === 'stock' && <><StockSection data={current} search={search} blocked={blocked} open={open} exportCsv={exportCsv} /><StockAdvanced key={retrySuccess} workspace={workspace} data={current} blocked={blocked || !!editor} save={save} /></>}
       {section === 'attendance' && <AttendanceSection data={current} workspace={workspace} members={workspace.members} search={search} blocked={blocked} open={open} save={save} exportCsv={exportCsv} editorOpen={!!editor} retrySuccess={retrySuccess} />}
       {section === 'expenses' && <ExpensesSection data={current} search={search} blocked={blocked} open={open} exportCsv={exportCsv} onReceiptBusy={setReceiptBusy} onReceiptsChanged={refresh} />}
-      {section === 'payments' && <PaymentsPanel key={retrySuccess} workspace={workspace} data={current} blocked={blocked} save={save} />}
+      {section === 'payments' && <PaymentsPanel key={retrySuccess} initialWorkOrderId={retrySuccess === 0 ? initialWorkOrderId : undefined} workspace={workspace} data={current} blocked={blocked} save={save} />}
     </>}
   </div>;
 }

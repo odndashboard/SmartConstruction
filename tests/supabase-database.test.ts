@@ -161,6 +161,8 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await db.exec(await readFile(new URL('../supabase/migrations/20261127065452_manual_lead_won.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127072310_won_lead_workorders.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127082025_quotation_approval_status.sql', import.meta.url), 'utf8'));
+    // Windows checkouts use CRLF: exercise the surgical replacement normalization.
+    await db.exec((await readFile(new URL('../supabase/migrations/20261127101206_payments_optional_gst_reopen_work.sql', import.meta.url), 'utf8')).replace(/\r?\n/g, '\r\n'));
   });
 
   beforeEach(async () => {
@@ -622,6 +624,122 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await rejectsSql(() => commit({ actor: ids.sales, expectedRevision: saved.data.revision, requestId: crypto.randomUUID(), action: 'lead_save', payloadHash: hash, changes: salesChanges, message: 'Forged Sales order edit' }), 'PT403');
     const edited = await mutate('lead_save', { id: lead.id, title: 'Sales detail update' }, ids.sales);
     assert.deepEqual(edited.data.workorders, saved.data.workorders);
+  });
+
+  test('Owner, Manager and Operations reopen completed work with only its status changed', async () => {
+    await bootstrap();
+    await addMember(ids.manager, 'Manager', 'MANAGER');
+    await addMember(ids.operations, 'Operations', 'OPERATIONS');
+    await addMember(ids.sales, 'Sales', 'SALES');
+    await addMember(ids.accountant, 'Accountant', 'ACCOUNTANT');
+    await addMember(ids.viewer, 'Viewer', 'VIEWER');
+    for (const actor of [ids.owner, ids.manager, ids.operations]) {
+      const saved = await mutate('lead_save', { title: `Work to reopen ${actor}`, status: 'WON' });
+      const id = saved.data.workorders.find(row => row.leadId===saved.data.leads.find(row=>row.title===`Work to reopen ${actor}`)!.id)!.id;
+      await mutate('workorder_save', { id, status: 'ACTIVE', owner: ids.operations, startDate: '2026-11-20', endDate: '2026-11-25' }, actor);
+      await mutate('milestone_add', { workorderId: id, title: 'Delivery inspection', dueDate: '' }, actor);
+      const pending = (await read(actor)).workorders.find(row=>row.id===id)!;
+      const incomplete = emptyChanges(await read(actor)); incomplete.upserts.workorders=[{ ...pending, status:'COMPLETED' }];
+      await rejectsSql(async()=>commit({actor,expectedRevision:(await read(actor)).revision,requestId:crypto.randomUUID(),action:'workorder_save',payloadHash:hash,changes:incomplete,message:'Cannot close unfinished work'}),'PT400');
+      await mutate('milestone_complete', { workorderId: id, milestoneId: pending.milestones[0].id }, actor);
+      await mutate('workorder_save', { id, status:'COMPLETED' }, actor);
+      const before = await read(actor); const closed = before.workorders.find(row=>row.id===id)!;
+      const reopening = plan(before,'workorder_save',{id,status:'ACTIVE'});
+      for(const denied of [ids.sales,ids.accountant,ids.viewer]) await rejectsSql(()=>commit({...reopening,actor:denied}),'PT403');
+      for(const change of [{owner:'Forged'}, {startDate:'2026-11-21'}, {endDate:'2026-11-26'}, {title:'Forged scope'}, {milestones:[]}]) {
+        const forged=structuredClone(reopening); forged.changes.upserts.workorders=[{...closed,status:'ACTIVE',...change}];
+        await rejectsSql(()=>commit(forged),'PT400');
+      }
+      for(const status of ['PLANNED','ON_HOLD','CANCELLED']) {
+        const forged=structuredClone(reopening); forged.changes.upserts.workorders=[{...closed,status}];
+        await rejectsSql(()=>commit(forged),'PT400');
+      }
+      const reopened=(await commit(reopening)).data;
+      const order=reopened.workorders.find(row=>row.id===id)!;
+      assert.equal(order.status,'ACTIVE');
+      assert.deepEqual(order,{...closed,status:'ACTIVE',updatedAt:order.updatedAt});
+      assert.deepEqual(reopened.quotations,before.quotations); assert.deepEqual(reopened.leads,before.leads);
+      await mutate('workorder_save',{id,status:'CANCELLED'},actor);
+      const cancelled=await read(actor); const cannotReopen=emptyChanges(cancelled);
+      cannotReopen.upserts.workorders=[{...cancelled.workorders.find(row=>row.id===id)!,status:'ACTIVE'}];
+      await rejectsSql(()=>commit({actor,expectedRevision:cancelled.revision,requestId:crypto.randomUUID(),action:'workorder_save',payloadHash:hash,changes:cannotReopen,message:'Cancelled is final'}),'PT400');
+    }
+  });
+
+  test('explicit no-GST quotations persist correct decimal totals and issue without GST, HSN or discount input', async () => {
+    await bootstrap();
+    const created=await mutate('lead_save',{title:'No-GST project',siteAddress:'Actual work site'});
+    const lead=created.data.leads[0]; const customer=created.data.customers[0];
+    await mutate('company_save',{name:'Contractor',legalName:'Actual contractor',address:'Supplier address',gstin:'',stateCode:'',phone:'',email:'',website:'',terms:''});
+    await mutate('customer_save',{id:customer.id,name:customer.name,address:'Billing address'});
+    const saved=await mutate('quote_save',{leadId:lead.id,title:'No-GST actual scope',gstEnabled:false,validUntil:FUTURE_DATE,siteAddress:'Actual work site',placeOfSupply:'',
+      items:[{id:'no-gst-item',description:'Installation',quantity:'2.5',unit:'job',unitPrice:'100.01',gstRate:'0'}]});
+    const draft=saved.data.quotations[0];
+    assert.equal(draft.gstEnabled,false); assert.equal(draft.items[0].hsnSac,''); assert.equal(draft.items[0].discount,'0');
+    assert.deepEqual(draft.totals,{subtotal:25003,discount:0,taxable:25003,cgst:0,sgst:0,utgst:0,igst:0,total:25003,mode:'NO_GST',needsConfig:false});
+    await mutate('quote_issue',{id:draft.id});
+    const accepted=await mutate('quote_accept',{id:draft.id,acceptanceNote:'Actual customer approval'});
+    const quote=accepted.data.quotations.find(row=>row.id===draft.id)!;
+    const order=accepted.data.workorders.find(row=>row.quoteId===quote.id)!;
+    assert.deepEqual(order.snapshot,quote); assert.equal(quote.gstEnabled,false); assert.equal(quote.totals.total,25003);
+    const forbidden=emptyChanges(accepted.data); forbidden.upserts.quotations=[{...quote,gstEnabled:true}];
+    await rejectsSql(()=>commit({actor:ids.owner,expectedRevision:accepted.data.revision,requestId:crypto.randomUUID(),action:'quote_save',payloadHash:hash,changes:forbidden,message:'Cannot reprice accepted scope'}),'PT400');
+  });
+
+  test('SQL rejects forged no-GST flags, rates, monetary types and inconsistent line or quotation totals atomically', async () => {
+    await bootstrap();
+    const lead=(await mutate('lead_save',{title:'Validated no-GST quote'})).data.leads[0];
+    const saved=await mutate('quote_save',{leadId:lead.id,title:'No-GST validation',gstEnabled:false,validUntil:FUTURE_DATE,
+      items:[{id:'checked-item',description:'Real service',quantity:'1',unit:'job',unitPrice:'100',gstRate:'0'}]});
+    const draft=saved.data.quotations[0]; const before=await read();
+    const candidates: Record<string,unknown>[]=[
+      {...draft,gstEnabled:'false'}, {...draft,gstEnabled:null}, {...draft,gstEnabled:true},
+      {...draft,items:[{...draft.items[0],gstRate:'18'}]}, {...draft,items:[{...draft.items[0],quantity:'0'}]},
+      {...draft,items:[{...draft.items[0],unitPrice:'101'}]}, {...draft,items:[{...draft.items[0],gross:'10000'}]},
+      {...draft,items:[{...draft.items[0],cgst:1}]}, {...draft,items:[{...draft.items[0],discount:'1'}]},
+      {...draft,totals:{...draft.totals,total:10001}}, {...draft,totals:{...draft.totals,subtotal:'10000'}},
+      {...draft,totals:{...draft.totals,mode:'CGST_SGST'}}, {...draft,totals:{...draft.totals,needsConfig:true}},
+    ];
+    const absent:Record<string,unknown>={...draft}; delete absent.gstEnabled; candidates.push(absent);
+    for(const forged of candidates) {
+      const changes=emptyChanges(before); changes.upserts.quotations=[forged];
+      await rejectsSql(()=>commit({actor:ids.owner,expectedRevision:before.revision,requestId:crypto.randomUUID(),action:'quote_save',payloadHash:hash,changes,message:'Forged price'}),'23514');
+      assert.deepEqual(await read(),before);
+    }
+  });
+
+  test('legacy quotations retain GST and hidden historical HSN and discount on draft edits', async () => {
+    await bootstrap();
+    const lead=(await mutate('lead_save',{title:'Legacy priced project',stateCode:'06'})).data.leads[0];
+    await mutate('company_save',{name:'Legacy company',legalName:'Legacy contractor',address:'Supplier address',gstin:'06ABCDE1234F1Z5',stateCode:'06',phone:'',email:'',website:'',terms:''});
+    const saved=await mutate('quote_save',{leadId:lead.id,title:'Legacy taxable quote',gstEnabled:true,placeOfSupply:'06',validUntil:FUTURE_DATE,
+      items:[{id:'legacy-item',description:'Service',hsnSac:'9954',quantity:'1',unit:'job',unitPrice:'1000',discount:'100',gstRate:'18'}]});
+    const original=saved.data.quotations[0];
+    const legacy:Record<string,unknown>={...original}; delete legacy.gstEnabled;
+    const changes=emptyChanges(saved.data); changes.upserts.quotations=[legacy];
+    await commit({actor:ids.owner,expectedRevision:saved.data.revision,requestId:crypto.randomUUID(),action:'quote_save',payloadHash:hash,changes,message:'Historical missing mode fixture'});
+    const edited=await mutate('quote_save',{id:original.id,leadId:lead.id,title:'Edited legacy title',placeOfSupply:'06',validUntil:FUTURE_DATE,
+      items:[{id:'legacy-item',description:'Service',quantity:'1',unit:'job',unitPrice:'1000',gstRate:'18'}]});
+    const quote=edited.data.quotations.find(row=>row.id===original.id)!;
+    assert.equal(quote.gstEnabled,true); assert.equal(quote.items[0].hsnSac,'9954'); assert.equal(quote.items[0].discount,'100');
+    assert.deepEqual(quote.totals,original.totals);
+  });
+
+  test('GST quotations still use real registration and taxes with no HSN or discount entry', async () => {
+    await bootstrap();
+    const created=await mutate('lead_save',{title:'GST project without code fields',siteAddress:'Actual site',stateCode:'06'});
+    const lead=created.data.leads[0]; const customer=created.data.customers[0];
+    await mutate('customer_save',{id:customer.id,name:customer.name,address:'Billing address',stateCode:'06'});
+    await mutate('company_save',{name:'Registered business',legalName:'Registered contractor',address:'Supplier address',gstin:'06ABCDE1234F1Z5',stateCode:'06',phone:'',email:'',website:'',terms:''});
+    const saved=await mutate('quote_save',{leadId:lead.id,title:'Taxable installation',gstEnabled:true,validUntil:FUTURE_DATE,siteAddress:'Actual site',placeOfSupply:'06',
+      items:[{id:'tax-item',description:'Installation',quantity:'1',unit:'job',unitPrice:'100',gstRate:'18'}]});
+    const draft=saved.data.quotations[0];
+    assert.equal(draft.items[0].hsnSac,''); assert.equal(draft.items[0].discount,'0');
+    const issued=(await mutate('quote_issue',{id:draft.id})).data.quotations[0];
+    assert.equal(issued.status,'ISSUED'); assert.equal(issued.gstEnabled,true);
+    assert.equal(issued.totals.mode,'CGST_SGST'); assert.equal(issued.totals.cgst,900); assert.equal(issued.totals.sgst,900); assert.equal(issued.totals.total,11800);
+    const accepted=await mutate('quote_accept',{id:issued.id,acceptanceNote:'Actual taxed acceptance'});
+    assert.deepEqual(accepted.data.workorders[0].snapshot,accepted.data.quotations[0]);
   });
 
   test('accepted quotation links the same unpriced order after delivery completion without reopening it', async () => {

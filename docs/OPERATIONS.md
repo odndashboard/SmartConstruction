@@ -99,11 +99,11 @@ The storage bucket is private, with no direct anon/authenticated read or write p
 
 ## Customer payments
 
-The **Payments** navigation tab is Owner-only, including API reads, writes, exports and activity history. A work order from a Won lead appears in Payments once it has an accepted quotation. The frozen quotation total determines the contract amount.
+The **Payments** navigation tab is Owner-only, including API reads, writes, exports and activity history. From a Won work order, choose **Record payment** to enter money received against that order. Receipts before quotation acceptance are advances. Acceptance sets the contract amount and credits the advances, including any excess received.
 
 The Owner can add due-date instalments and record actual customer receipts with a date, method (cash, bank, UPI, cheque or other), reference and notes. The app tracks contract amount, scheduled amount, received, outstanding, overdue and unallocated advance. Payments are a record of money received outside the app; this module does not charge a customer or initiate a bank transfer.
 
-Net receipts automatically allocate to active instalments in earliest-due-date order, then creation order. Unallocated amounts are advances beyond the scheduled instalments. Overdue includes only unpaid active instalments due before today in India time. Scheduled instalments and net receipts cannot exceed the work-order contract amount. Future-dated receipts and new receipts/plans for cancelled work orders are rejected.
+Net receipts automatically allocate to active instalments in earliest-due-date order, then creation order. Unallocated amounts are advances beyond the scheduled instalments. Overdue includes only unpaid active instalments due before today in India time. Instalments require an accepted quotation and fit within its total. Once that total is agreed, each new receipt is limited to the remaining balance. Future-dated receipts and new receipts/plans for cancelled work orders are rejected.
 
 Recorded payments are immutable. An Owner can void an incorrect payment with a reason; the original and void history remain visible and balances recalculate. Cancelling an instalment retains it in history. Changes are included in the Owner's Team activity tab. All monetary arithmetic uses exact integer paise; aggregate values are returned as integer strings.
 

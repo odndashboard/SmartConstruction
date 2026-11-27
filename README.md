@@ -65,7 +65,7 @@ There is no public self-registration screen and no first-visitor-is-owner rule. 
 
 - Company currency is INR and business dates use `Asia/Kolkata`.
 - Money is calculated using integer paise and exact intermediate arithmetic.
-- Real company registration, GSTIN, property location/state, and line-item tax information must be configured before issuing a real quotation. The app does not invent a company GSTIN or choose a universal construction GST rate.
+- New quotations default to **No GST**. Choose **Apply GST** to use the company's registration, place of supply and reviewed line-item rates. New work items take a description, unit, quantity and price.
 - Issuing freezes supplier/customer details and quote amounts. Editing issued commercial terms requires a new revision.
 - Owners and Managers can use **Quotations → Change status** to issue a draft as **Awaiting approval**, record customer acceptance, or mark an issued quotation **Expired**. A quotation expired early can return to **Awaiting approval** through its original valid-until date. After that date, use **Create revision** to set a new validity period.
 - Marking a lead Won automatically creates its Planned work order, including when the lead has no quotation. The work order shows project details and expected kW; approved totals remain blank until a quotation is accepted.
