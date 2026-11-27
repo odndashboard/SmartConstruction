@@ -129,6 +129,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     const migration = await readFile(new URL('../supabase/migrations/202611230001_crm.sql', import.meta.url), 'utf8');
     await db.exec(migration);
     await db.exec(await readFile(new URL('../supabase/migrations/20261124072200_accountant_and_lead_status.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261127062903_lead_expected_kw.sql', import.meta.url), 'utf8'));
   });
 
   beforeEach(async () => {
@@ -327,6 +328,152 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await mutate('member_role', { userId: ids.manager, role: 'SALES' });
     await rejectsSql(() => commit(pending), 'PT403');
     assert.equal((await read()).leads[0].status, 'NEW');
+  });
+
+  test('lead entry creates its customer atomically, persists decimal kW and retries only once', async () => {
+    await bootstrap();
+    await addMember(ids.sales, 'sales', 'SALES');
+    const before = await read(ids.sales);
+    const input = plan(before, 'lead_save', { title: 'Rooftop enquiry', contact: 'Actual contact', phone: '9876543210', expectedKw: '10.5', stateCode: '06' });
+    const first = await commit(input);
+    const retried = await commit(input);
+    assert.equal(first.data.customers.length, 1);
+    assert.equal(retried.data.customers.length, 1);
+    assert.equal(retried.data.leads.length, 1);
+    assert.equal(retried.data.revision, first.data.revision);
+    const lead = (await read(ids.sales)).leads[0];
+    const customer = first.data.customers[0];
+    assert.equal(lead.expectedKw, 10.5);
+    assert.equal(lead.customerId, customer.id);
+    assert.equal(lead.email, '');
+    assert.equal(customer.name, 'Actual contact');
+    assert.equal(customer.contact, 'Actual contact');
+    assert.equal(customer.phone, '9876543210');
+    assert.equal(customer.email, '');
+    assert.equal(customer.address, '');
+    assert.equal(customer.gstin, '');
+    const saved = await mutate('lead_save', { id: lead.id, title: lead.title, expectedKw: '12.75' }, ids.sales);
+    assert.equal(saved.data.leads[0].expectedKw, 12.75);
+    assert.equal(saved.data.leads[0].customerId, customer.id);
+    assert.deepEqual(saved.data.customers[0], customer);
+    const omitted = await mutate('lead_save', { id: lead.id, title: 'Updated project title' }, ids.sales);
+    assert.equal(omitted.data.leads[0].expectedKw, 12.75);
+    const cleared = await mutate('lead_save', { id: lead.id, title: lead.title, expectedKw: '' }, ids.sales);
+    assert.equal(cleared.data.leads[0].expectedKw, null);
+    assert.equal((await mutate('lead_save', { id: lead.id, title: lead.title, expectedKw: 0 }, ids.sales)).data.leads[0].expectedKw, 0);
+  });
+
+  test('historical leads retain linked customers and email when the replacement form omits them', async () => {
+    await bootstrap();
+    const customer = (await mutate('customer_save', { name: 'Existing client', email: 'historic-client@example.invalid' })).data.customers[0];
+    const legacy = plan(await read(), 'lead_save', { customerId: customer.id, title: 'Historical lead', email: 'historic-lead@example.invalid' });
+    const legacyRow = legacy.changes.upserts.leads[0] as Record<string, unknown>;
+    delete legacyRow.expectedKw;
+    const original = await commit(legacy);
+    assert.equal(Object.hasOwn(original.data.leads[0], 'expectedKw'), false);
+    const updated = await mutate('lead_save', { id: original.data.leads[0].id, title: 'Updated historical title', expectedKw: '5.25' });
+    assert.equal(updated.data.leads[0].email, 'historic-lead@example.invalid');
+    assert.equal(updated.data.leads[0].customerId, customer.id);
+    assert.equal(updated.data.leads[0].expectedKw, 5.25);
+    assert.deepEqual(updated.data.customers, original.data.customers);
+  });
+
+  test('SQL rejects forged expected kW types and values without leaving a customer, lead or receipt', async () => {
+    await bootstrap();
+    const before = await read();
+    for (const expectedKw of [-0.1, '10.5', 'NaN', 'Infinity', true, [], {}]) {
+      const input = plan(before, 'lead_save', { title: 'Capacity validation', expectedKw: '5.5' });
+      (input.changes.upserts.leads[0] as Record<string, unknown>).expectedKw = expectedKw;
+      await rejectsSql(() => commit(input), '23514');
+      const after = await read();
+      assert.equal(after.revision, before.revision);
+      assert.equal(after.customers.length, 0);
+      assert.equal(after.leads.length, 0);
+      assert.deepEqual(after.activity, before.activity);
+      const prepared = await query<{ receiptMessage: string | null }>('SELECT public.crm_mutation_prepare($1::uuid, $2::text, $3::text, $4::text) AS result', [ids.owner, input.requestId, 'lead_save', hash]);
+      assert.equal(prepared.receiptMessage, null);
+    }
+    const saved = await mutate('lead_save', { title: 'Finite capacity', expectedKw: 0 });
+    await setRole('postgres');
+    await rejectsSql(() => db.query("UPDATE crm.leads SET payload=jsonb_set(payload,'{expectedKw}','1e309'::jsonb) WHERE id=$1", [saved.data.leads[0].id]), '23514');
+    await setRole('service_role');
+    assert.equal((await read()).leads[0].expectedKw, 0);
+  });
+
+  test('lead_save cannot overwrite customers or create unrelated and fabricated customer records', async () => {
+    await bootstrap();
+    const original = (await mutate('customer_save', { name: 'Protected existing client', phone: '1234567890' })).data.customers[0];
+    const before = await read();
+    const overwrite = plan(before, 'lead_save', { customerId: original.id, title: 'Existing customer enquiry' });
+    overwrite.changes.upserts.customers = [{ ...original, name: 'Overwritten name' }];
+    await rejectsSql(() => commit(overwrite), 'PT403');
+    for (const field of ['name', 'contact', 'phone', 'email', 'address', 'gstin', 'stateCode']) {
+      const input = plan(before, 'lead_save', { title: 'New enquiry', contact: 'Actual contact', phone: '9876543210', stateCode: '06' });
+      (input.changes.upserts.customers[0] as Record<string, unknown>)[field] = 'Fabricated value';
+      await rejectsSql(() => commit(input), 'PT400');
+    }
+    const unrelated = plan(before, 'lead_save', { title: 'One new enquiry' });
+    unrelated.changes.upserts.customers.push({ ...(unrelated.changes.upserts.customers[0] as object), id: crypto.randomUUID() });
+    await rejectsSql(() => commit(unrelated), 'PT400');
+    const noLead = plan(before, 'lead_save', { title: 'No linked enquiry' });
+    noLead.changes.upserts.leads = [];
+    await rejectsSql(() => commit(noLead), 'PT400');
+    const saved = await mutate('lead_save', { customerId: original.id, title: 'Existing lead' });
+    const reassignment = plan(saved.data, 'lead_save', { title: 'Replacement customer' });
+    (reassignment.changes.upserts.leads[0] as Record<string, unknown>).id = saved.data.leads[0].id;
+    await rejectsSql(() => commit(reassignment), 'PT400');
+    const after = await read();
+    assert.deepEqual(after.customers, [original]);
+    assert.equal(after.leads.length, 1);
+    assert.equal(after.leads[0].customerId, original.id);
+  });
+
+  test('automatic customer creation obeys current lead roles and SQL status guards', async () => {
+    await bootstrap();
+    await addMember(ids.manager, 'manager', 'MANAGER');
+    await addMember(ids.sales, 'sales', 'SALES');
+    await addMember(ids.operations, 'operations', 'OPERATIONS');
+    await addMember(ids.accountant, 'accountant', 'ACCOUNTANT');
+    await addMember(ids.viewer, 'viewer', 'VIEWER');
+    const before = await read();
+    for (const actor of [ids.operations, ids.accountant, ids.viewer]) {
+      const input = plan(before, 'lead_save', { title: 'Unauthorized enquiry', expectedKw: '4.5' });
+      await rejectsSql(() => commit({ ...input, actor }), 'PT403');
+    }
+    const forged = plan(before, 'lead_save', { title: 'Forged Sales stage', status: 'CONTACTED' });
+    await rejectsSql(() => commit({ ...forged, actor: ids.sales }), 'PT403');
+    assert.equal((await read()).customers.length, 0);
+    const manager = await mutate('lead_save', { title: 'Manager enquiry', status: 'CONTACTED', expectedKw: 2.5 }, ids.manager);
+    assert.equal(manager.data.leads[0].status, 'CONTACTED');
+    assert.equal(manager.data.customers[0].name, 'Manager enquiry');
+  });
+
+  test('a lead with an automatic customer supports quotation issue, acceptance and work-order snapshots', async () => {
+    await bootstrap();
+    const { company } = await read();
+    await mutate('company_save', { name: company.name, legalName: 'Test contractor', address: 'Supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: company.terms });
+    const created = await mutate('lead_save', { title: 'Solar installation', contact: 'Project contact', phone: '9876543210', expectedKw: '10.5', stateCode: '06', siteAddress: 'Actual site address' });
+    const lead = created.data.leads[0];
+    const customer = created.data.customers[0];
+    await mutate('customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, email: customer.email, stateCode: customer.stateCode, address: 'Confirmed billing address' });
+    const quote = (await mutate('quote_save', {
+      leadId: lead.id, title: 'System quotation', validUntil: '2026-12-23', placeOfSupply: '06', siteAddress: lead.siteAddress, terms: 'Agreed terms',
+      items: [{ id: 'capacity-item', description: 'Solar installation', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }],
+    })).data.quotations[0];
+    const issued = (await mutate('quote_issue', { id: quote.id })).data.quotations[0];
+    assert.equal(issued.customer?.id, customer.id);
+    assert.equal(issued.customer?.phone, '9876543210');
+    assert.equal(issued.customer?.email, '');
+    await mutate('quote_accept', { id: quote.id, acceptanceNote: 'Written customer acceptance' });
+    const converted = await mutate('quote_convert', { id: quote.id });
+    const snapshot = structuredClone(converted.data.workorders[0].snapshot);
+    assert.equal(converted.data.leads[0].status, 'WON');
+    assert.equal(converted.data.leads[0].expectedKw, 10.5);
+    const updated = await mutate('lead_save', { id: lead.id, title: lead.title, expectedKw: '11.25' });
+    assert.equal(updated.data.leads[0].expectedKw, 11.25);
+    assert.equal(updated.data.leads[0].customerId, customer.id);
+    assert.deepEqual(updated.data.workorders[0].snapshot, snapshot);
+    assert.deepEqual(updated.data.quotations[0], snapshot);
   });
 
   test('a receipt cannot be reused for a different payload, action, or actor', async () => {

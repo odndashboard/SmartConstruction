@@ -15,6 +15,7 @@ export interface Customer {
 }
 export interface Lead {
   id: string; customerId: string; title: string; contact: string; phone: string; email: string;
+  expectedKw?: number | null;
   location: string; siteAddress: string; stateCode: string; value: number; status: LeadStatus;
   source: string; owner: string; priority: 'High' | 'Medium' | 'Low'; notes: string;
   lostReason: string; isDemo: boolean; createdAt: string; updatedAt: string;

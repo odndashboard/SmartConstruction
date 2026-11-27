@@ -12,7 +12,17 @@ const text = (max = 200) => z.string().trim().max(max);
 const required = (max = 200) => text(max).min(1, 'This field is required.');
 const blank = (max = 200) => text(max).default('');
 const id = required(120);
-const email = z.union([z.string().trim().email().max(254), z.literal('')]).default('');
+const emailValue = z.union([z.string().trim().email().max(254), z.literal('')]);
+const email = emailValue.default('');
+// Form fields arrive as strings; reject coercions such as booleans, hex and
+// scientific notation, while retaining zero and decimal kW as JSON numbers.
+const expectedKw = z.union([
+  z.number().finite().nonnegative(),
+  z.string().trim().refine(value => value === '' || /^(?:\d+\.?\d*|\.\d+)$/.test(value), 'Enter a nonnegative number of kW.')
+    .transform(value => value === '' ? null : Number(value))
+    .refine(value => value === null || Number.isFinite(value), 'Enter a finite number of kW.'),
+  z.null(),
+]).optional();
 const state = z.string().refine(v => !v || STATE_OPTIONS.some(s => s.value === v), 'Choose a valid Indian state.').default('');
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.').refine(v => {
   const d = new Date(`${v}T00:00:00Z`); return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
@@ -31,7 +41,7 @@ const item = z.object({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- The dispatcher selects a heterogeneous schema by a validated action string; every payload is parsed by its strict schema before use.
 const schemas: Record<string, z.ZodType<any>> = {
   customer_save: z.object({ id: id.optional(), name: required(), contact: blank(), phone: blank(40), email, address: blank(2000), stateCode: state, gstin: blank(15) }).strict(),
-  lead_save: z.object({ id: id.optional(), customerId: id, title: required(), contact: blank(), phone: blank(40), email,
+  lead_save: z.object({ id: id.optional(), customerId: id.optional(), title: required(), contact: blank(), phone: blank(40), email: emailValue.optional(), expectedKw,
     location: blank(), siteAddress: blank(2000), stateCode: state, value: text(30).default('0'), status: leadStatus.optional(),
     source: blank(100), owner, priority: z.enum(['High', 'Medium', 'Low']).default('Medium'), notes: blank(10000) }).strict(),
   lead_status: z.object({ id, status: leadStatus, lostReason: blank(3000) }).strict(),
@@ -139,8 +149,14 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       return 'Customer saved.';
     }
     case 'lead_save': {
-      const customer = get(data.customers, p.customerId, 'Customer');
       const existing = p.id ? get(data.leads, p.id, 'Lead') : undefined;
+      const customerId = p.customerId ?? existing?.customerId;
+      // Customer records remain the quotation/billing anchor. New enquiries can
+      // create that anchor atomically using only the contact information given.
+      const customer = customerId ? get(data.customers, customerId, 'Customer') : {
+        id: crypto.randomUUID(), name: p.contact || p.title, contact: p.contact, phone: p.phone,
+        email: p.email ?? '', address: '', stateCode: p.stateCode, gstin: '', isDemo: false, createdAt: stamp,
+      };
       const status: LeadStatus = p.status ?? existing?.status ?? 'NEW';
       if (status !== (existing?.status ?? 'NEW') && !APPROVE.includes(data.user.role)) {
         throw new CRMError('Only an Admin or Manager can change a lead status.', 403);
@@ -151,9 +167,12 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
         assert(existing.isDemo === customer.isDemo, 'Example and real customer records cannot be mixed.');
         assert(!data.quotations.some(q => q.leadId === existing.id && q.status !== 'DRAFT'), 'A lead with issued quotations cannot move to another customer.');
       }
-      const record: Lead = { ...p, status, id: existing?.id ?? crypto.randomUUID(), value: inputMoney(p.value),
+      const record: Lead = { ...p, customerId: customer.id, email: p.email ?? existing?.email ?? '',
+        expectedKw: p.expectedKw === undefined ? existing?.expectedKw ?? null : p.expectedKw,
+        status, id: existing?.id ?? crypto.randomUUID(), value: inputMoney(p.value),
         lostReason: status === 'LOST' ? existing?.lostReason ?? '' : '', isDemo: customer.isDemo,
         createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
+      if (!customerId) data.customers.push(customer);
       if (existing) Object.assign(existing, record); else data.leads.push(record);
       audit(data, action, 'lead', record.id, `${existing ? 'Updated' : 'Added'} lead ${record.title}`, stamp);
       return 'Lead saved.';
