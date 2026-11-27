@@ -16,7 +16,7 @@ const ids = {
   anonymous: '20000000-0000-4000-8000-000000000009', banned: '20000000-0000-4000-8000-000000000010',
   accountant: '20000000-0000-4000-8000-000000000011',
 };
-const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql'];
+const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql'];
 let db: PGlite;
 let today: string;
 let month: string;

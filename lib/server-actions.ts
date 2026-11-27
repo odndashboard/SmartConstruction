@@ -93,7 +93,6 @@ function checkOwner(data: WorkspaceData, value: string) {
   assert(!value || data.members.some(member => member.userId === value && member.active), 'Assign work to an active team member.');
 }
 function checkLeadTransition(lead: Pick<Lead, 'status' | 'lostReason'>, target: LeadStatus, lostReason: string) {
-  assert(target !== 'WON' || lead.status === 'WON', 'Won status is recorded by accepting a quotation.');
   assert(lead.status !== 'WON' || target === 'WON', 'A won lead cannot be reopened through a status change.');
   assert(lead.status !== 'LOST' || target === 'NEW' || target === 'LOST', 'Reopen a lost lead as New enquiry first.');
   assert(target !== 'LOST' || lostReason.trim().length > 0, 'Record a reason before marking this lead lost.');

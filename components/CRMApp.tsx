@@ -434,8 +434,8 @@ function LeadForm({ lead: l, data, busy, close, mutate, manageLeadStatus }: { le
       <Field label="Project site address" wide><textarea name="siteAddress" defaultValue={l?.siteAddress} rows={2} /></Field>
       <Field label="Assigned to"><select name="owner" defaultValue={assigneeValue(data, l ? l.owner : data.user.userId)}><MemberOptions data={data} /></select></Field>
       <Field label="Priority"><select name="priority" defaultValue={l?.priority || 'Medium'}><option>High</option><option>Medium</option><option>Low</option></select></Field>
-      <Field label="Stage" hint={!manageLeadStatus ? 'Admin and Manager update lead status.' : l?.status === 'WON' ? 'Won is recorded from quotation acceptance.' : undefined}>
-        {canChooseStage ? <select name="status" defaultValue={l?.status || 'NEW'}>{LEAD_STAGES.filter(s => s.value !== 'LOST' || l?.status === 'LOST').filter(s => s.value !== 'WON').filter(s => l?.status !== 'LOST' || ['NEW', 'LOST'].includes(s.value)).map(s => <option value={s.value} key={s.value}>{s.label}</option>)}</select> : <input readOnly value={leadLabel(l?.status || 'NEW')} />}
+      <Field label="Stage" hint={!manageLeadStatus ? 'Admin and Manager update lead status.' : l?.status === 'WON' ? 'Won leads cannot be reopened.' : undefined}>
+        {canChooseStage ? <select name="status" defaultValue={l?.status || 'NEW'}>{LEAD_STAGES.filter(s => s.value !== 'LOST' || l?.status === 'LOST').filter(s => l?.status !== 'LOST' || ['NEW', 'LOST'].includes(s.value)).map(s => <option value={s.value} key={s.value}>{s.label}</option>)}</select> : <input readOnly value={leadLabel(l?.status || 'NEW')} />}
       </Field>
       <Field label="Lead source"><select name="source" defaultValue={l?.source || 'Referral'}>{['Referral', 'Website', 'Walk-in', 'Phone enquiry', 'Social media', 'Instagram', 'Repeat customer', 'Other'].map(s => <option key={s}>{s}</option>)}</select></Field>
       <Field label="Project notes" wide><textarea name="notes" rows={3} defaultValue={l?.notes} placeholder="Requirements, budget, timings and useful context…" /></Field>
@@ -447,8 +447,8 @@ function LeadStatusForm({ lead, busy, close, mutate, open }: { lead: Lead; busy:
   const [reason, setReason] = useState(lead.lostReason);
   const changed = status !== lead.status || status === 'LOST' && reason.trim() !== lead.lostReason;
   const canSave = changed && (status !== 'LOST' || reason.trim().length > 0);
-  if (lead.status === 'WON') return <div className="confirmation"><p>This lead is won. Its status is linked to the accepted quotation.</p><button type="button" className="button button-secondary" onClick={close}>Back to lead</button></div>;
-  const choices = LEAD_STAGES.filter(stage => stage.value !== 'WON' && (lead.status !== 'LOST' || stage.value === 'NEW' || stage.value === 'LOST'));
+  if (lead.status === 'WON') return <div className="confirmation"><p>Won leads cannot be reopened.</p><button type="button" className="button button-secondary" onClick={close}>Back to lead</button></div>;
+  const choices = LEAD_STAGES.filter(stage => lead.status !== 'LOST' || stage.value === 'NEW' || stage.value === 'LOST');
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSave || busy) return;
@@ -459,7 +459,7 @@ function LeadStatusForm({ lead, busy, close, mutate, open }: { lead: Lead; busy:
     <div className="form-intro"><Badge status={lead.status}>{leadLabel(lead.status)}</Badge><h3>{lead.title}</h3></div>
     <p className="form-description">{lead.status === 'LOST' ? 'Reopen this opportunity as a new enquiry before moving it through the pipeline again.' : 'Choose the next stage and save the update for your team.'}</p>
     <fieldset disabled={busy}>
-      <Field label="Lead status" hint="Won is recorded when a quotation is accepted."><select name="status" value={status} onChange={event => setStatus(event.target.value as LeadStatus)}>{choices.map(stage => <option key={stage.value} value={stage.value}>{stage.label}</option>)}</select></Field>
+      <Field label="Lead status" hint={lead.status !== 'LOST' ? 'Mark Won when the opportunity is confirmed.' : undefined}><select name="status" value={status} onChange={event => setStatus(event.target.value as LeadStatus)}>{choices.map(stage => <option key={stage.value} value={stage.value}>{stage.label}</option>)}</select></Field>
       {status === 'LOST' && <Field label="Reason for closing *" hint="The reason and lead history stay available to your team."><textarea name="lostReason" required rows={4} maxLength={3000} value={reason} onChange={event => setReason(event.target.value)} placeholder="Why did this opportunity not go ahead?" /></Field>}
     </fieldset>
     <FormFooter busy={busy} disabled={!canSave} onClose={close} label={lead.status === 'LOST' && status === 'NEW' ? 'Reopen lead' : 'Save status'} />

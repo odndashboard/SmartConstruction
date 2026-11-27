@@ -92,7 +92,7 @@ describe('lead enquiry entry without customer selection', () => {
   });
 
   test('failed lead validation leaves no orphan customer and preserves role restrictions', () => {
-    for (const payload of [{ title: 'Bad amount', value: '-1' }, { title: 'Unknown owner', owner: 'missing' }, { title: 'Invalid stage', status: 'WON' }]) {
+    for (const payload of [{ title: 'Bad amount', value: '-1' }, { title: 'Unknown owner', owner: 'missing' }, { title: 'Invalid stage', status: 'LOST' }]) {
       const data = workspace(); const before = structuredClone(data);
       assert.throws(() => act(data, 'lead_save', payload), CRMError);
       assert.deepEqual(data, before);

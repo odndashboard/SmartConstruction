@@ -130,6 +130,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await db.exec(migration);
     await db.exec(await readFile(new URL('../supabase/migrations/20261124072200_accountant_and_lead_status.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/20261127062903_lead_expected_kw.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20261127065452_manual_lead_won.sql', import.meta.url), 'utf8'));
   });
 
   beforeEach(async () => {
@@ -303,7 +304,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     assert.equal(saved.data.leads.length, 1);
   });
 
-  test('SQL status guard preserves lost reasons, reopening rules and automatic Won status', async () => {
+  test('SQL status guard preserves lost reasons, reopening rules and terminal Won status', async () => {
     await bootstrap();
     const customer = (await mutate('customer_save', { name: 'Transition client' })).data.customers[0];
     const lead = (await mutate('lead_save', { customerId: customer.id, title: 'Transition project' })).data.leads[0];
@@ -312,19 +313,74 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
       changes.upserts.leads = [{ ...before.leads[0], status, lostReason }];
       return commit({ actor: ids.owner, expectedRevision: before.revision, requestId: crypto.randomUUID(), action: 'lead_status', payloadHash: hash, changes, message: 'Forged transition' });
     };
-    await rejectsSql(() => forgeStatus('WON'), 'PT400');
     await rejectsSql(() => forgeStatus('LOST'), 'PT400');
     await mutate('lead_status', { id: lead.id, status: 'LOST', lostReason: 'Postponed' });
     await rejectsSql(() => forgeStatus('NEGOTIATION'), 'PT400');
+    await rejectsSql(() => forgeStatus('WON'), 'PT400');
     await mutate('lead_status', { id: lead.id, status: 'NEW' });
-    assert.equal((await read()).leads[0].status, 'NEW');
+    await forgeStatus('WON');
+    await rejectsSql(() => forgeStatus('NEW'), 'PT400');
+    assert.equal((await read()).leads[0].status, 'WON');
+  });
+
+  test('Admin and Manager can mark Won through lead status and save without accepting a quotation', async () => {
+    await bootstrap();
+    await addMember(ids.manager, 'manager', 'MANAGER');
+    for (const actor of [ids.owner, ids.manager]) {
+      const lead = (await mutate('lead_save', { title: `Manual Won ${actor}`, expectedKw: '5.5' }, actor)).data.leads.find(row => row.title === `Manual Won ${actor}`)!;
+      const quote = (await mutate('quote_save', { leadId: lead.id, title: 'Unaccepted draft', validUntil: '2026-12-23', items: [] }, actor)).data.quotations.find(row => row.leadId === lead.id)!;
+      const before = await read(actor);
+      const statusResult = await mutate('lead_status', { id: lead.id, status: 'WON' }, actor);
+      assert.equal(statusResult.data.leads.find(row => row.id === lead.id)?.status, 'WON');
+      assert.equal(statusResult.data.leads.find(row => row.id === lead.id)?.expectedKw, 5.5);
+      assert.deepEqual(statusResult.data.quotations, before.quotations);
+      assert.deepEqual(statusResult.data.workorders, before.workorders);
+      assert.equal(statusResult.data.quotations.find(row => row.id === quote.id)?.status, 'DRAFT');
+      const saveLead = (await mutate('lead_save', { title: `Save Won ${actor}` }, actor)).data.leads.find(row => row.title === `Save Won ${actor}`)!;
+      const saved = await mutate('lead_save', { id: saveLead.id, title: saveLead.title, status: 'WON' }, actor);
+      assert.equal(saved.data.leads.find(row => row.id === saveLead.id)?.status, 'WON');
+      const created = await mutate('lead_save', { title: `Created Won ${actor}`, status: 'WON' }, actor);
+      assert.equal(created.data.leads.find(row => row.title === `Created Won ${actor}`)?.status, 'WON');
+    }
+  });
+
+  test('SQL denies forged manual Won by other roles and by unrelated actions', async () => {
+    await bootstrap();
+    for (const [name, role] of [['sales', 'SALES'], ['operations', 'OPERATIONS'], ['accountant', 'ACCOUNTANT'], ['viewer', 'VIEWER']] as const) {
+      await addMember(ids[name], name, role);
+    }
+    const lead = (await mutate('lead_save', { title: 'Protected manual Won' })).data.leads[0];
+    const before = await read();
+    for (const actor of [ids.sales, ids.operations, ids.accountant, ids.viewer]) {
+      for (const action of ['lead_status', 'lead_save']) {
+        const changes = emptyChanges(before);
+        changes.upserts.leads = [{ ...lead, status: 'WON' }];
+        await rejectsSql(() => commit({ actor, expectedRevision: before.revision, requestId: crypto.randomUUID(), action, payloadHash: hash, changes, message: 'Forged manual Won' }), 'PT403');
+      }
+      const created = plan(before, 'lead_save', { title: 'Forged created Won', status: 'WON' });
+      await rejectsSql(() => commit({ ...created, actor }), 'PT403');
+    }
+    const unrelated = emptyChanges(before);
+    unrelated.upserts.leads = [{ ...lead, status: 'WON' }];
+    await rejectsSql(() => commit({ actor: ids.owner, expectedRevision: before.revision, requestId: crypto.randomUUID(), action: 'quote_issue', payloadHash: hash, changes: unrelated, message: 'Wrong action for Won' }), 'PT400');
+    assert.deepEqual(await read(), before);
+  });
+
+  test('manual Won SQL migration refuses unrecognized predecessor drift', async () => {
+    const migration = await readFile(new URL('../supabase/migrations/20261127065452_manual_lead_won.sql', import.meta.url), 'utf8');
+    // The already-updated function is deliberately not the expected predecessor.
+    // Execute only the guarded DO statement inside this test's savepoint.
+    const guardedChange = migration.slice(migration.indexOf('do $migration$'), migration.indexOf('$migration$;') + '$migration$;'.length);
+    await setRole('postgres');
+    await rejectsSql(() => db.exec(guardedChange), '55000');
+    await setRole('service_role');
   });
 
   test('a prepared Manager status change cannot be committed after downgrade to Sales', async () => {
     await bootstrap(); await addMember(ids.manager, 'manager', 'MANAGER');
     const customer = (await mutate('customer_save', { name: 'Downgrade client' })).data.customers[0];
     const lead = (await mutate('lead_save', { customerId: customer.id, title: 'Downgrade project' })).data.leads[0];
-    const pending = plan(await read(ids.manager), 'lead_status', { id: lead.id, status: 'CONTACTED' });
+    const pending = plan(await read(ids.manager), 'lead_status', { id: lead.id, status: 'WON' });
     await mutate('member_role', { userId: ids.manager, role: 'SALES' });
     await rejectsSql(() => commit(pending), 'PT403');
     assert.equal((await read()).leads[0].status, 'NEW');

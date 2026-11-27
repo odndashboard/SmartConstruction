@@ -97,16 +97,16 @@ describe('server-side authorization and input boundaries', () => {
     assert.throws(() => act(data, 'quote_save', { ...quoteInput(quote.leadId), id: quote.id, totals: { total: 1 } }), CRMError);
   });
 
-  test('unknown assignments are rejected and won status requires acceptance', () => {
+  test('unknown assignments are rejected and lost leads require a reason and reopening as New', () => {
     const data = workspace(); const lead = addLead(data);
     assert.throws(() => act(data, 'lead_save', {
       customerId: lead.customerId, title: 'Invalid owner', owner: 'not-a-member', value: '0',
     }), CRMError);
-    assert.throws(() => act(data, 'lead_status', { id: lead.id, status: 'WON' }), CRMError);
     assert.throws(() => act(data, 'lead_status', { id: lead.id, status: 'LOST', lostReason: ' ' }), CRMError);
     act(data, 'lead_status', { id: lead.id, status: 'LOST', lostReason: 'Customer postponed the job.' });
     assert.equal(lead.status, 'LOST');
     assert.throws(() => act(data, 'lead_status', { id: lead.id, status: 'NEGOTIATION' }), CRMError);
+    assert.throws(() => act(data, 'lead_status', { id: lead.id, status: 'WON' }), CRMError);
     act(data, 'lead_status', { id: lead.id, status: 'NEW' });
     assert.equal(lead.lostReason, '');
   });
@@ -149,7 +149,8 @@ describe('server-side authorization and input boundaries', () => {
       act(data, 'lead_status', { id: lead.id, status: 'NEW' });
       assert.equal(lead.status, 'NEW');
       assert.equal(lead.lostReason, '');
-      assert.throws(() => act(data, 'lead_status', { id: lead.id, status: 'WON' }), CRMError);
+      act(data, 'lead_status', { id: lead.id, status: 'WON' });
+      assert.equal(lead.status, 'WON');
     }
     for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
       const data = workspace(); const lead = addLead(data); const before = structuredClone(lead);
@@ -197,6 +198,36 @@ describe('server-side authorization and input boundaries', () => {
 });
 
 describe('commercial document workflow', () => {
+  test('manually marking a lead Won preserves quotations and still requires acceptance before work-order conversion', () => {
+    for (const role of ['OWNER', 'MANAGER'] as Role[]) {
+      for (const action of ['lead_status', 'lead_save']) {
+        const data = workspace(); const quote = issuedQuote(data);
+        const lead = data.leads.find(row => row.id === quote.leadId)!;
+        const documents = structuredClone({ quotations: data.quotations, workorders: data.workorders, sequences: data.sequences });
+        setRole(data, role);
+        act(data, action, { id: lead.id, ...(action === 'lead_save' ? { title: lead.title } : {}), status: 'WON' });
+        assert.equal(lead.status, 'WON');
+        assert.deepEqual({ quotations: data.quotations, workorders: data.workorders, sequences: data.sequences }, documents);
+        assert.throws(() => act(data, 'quote_convert', { id: quote.id }), /Accept the quotation/);
+        assert.throws(() => act(data, 'quote_accept', { id: quote.id, acceptanceNote: '' }), CRMError);
+        act(data, 'quote_accept', { id: quote.id, acceptanceNote: 'Written confirmation of the quotation.' });
+        act(data, 'quote_convert', { id: quote.id });
+        assert.equal(quote.status, 'ACCEPTED'); assert.equal(lead.status, 'WON');
+        assert.deepEqual(data.workorders[0].snapshot, quote);
+      }
+    }
+  });
+
+  test('issuing a quotation for a manually won lead retains Won and does not infer acceptance', () => {
+    const data = workspace(); const quote = addQuote(data);
+    const lead = data.leads.find(row => row.id === quote.leadId)!;
+    act(data, 'lead_status', { id: lead.id, status: 'WON' });
+    act(data, 'quote_issue', { id: quote.id });
+    assert.equal(lead.status, 'WON'); assert.equal(quote.status, 'ISSUED');
+    assert.equal(quote.acceptanceNote, ''); assert.equal(quote.acceptedAt, undefined);
+    assert.deepEqual(data.workorders, []);
+  });
+
   test('incomplete registration allows an explicitly unpriced draft but prevents issue', () => {
     const data = workspace(false); const quote = addQuote(data);
     assert.equal(quote.status, 'DRAFT');
