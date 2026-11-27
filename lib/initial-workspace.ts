@@ -41,6 +41,7 @@ export async function getInitialWorkspace(options: ServerReadOptions & { jobId?:
     if (!workspace.user?.active || workspace.user.userId !== identity.userId) {
       throw new CRMError('Your workspace access changed. Please sign in again.', 403);
     }
+    if (workspace.user.role === 'DEALER') throw new CRMError('Use the dealer lead portal.', 403);
     const operations = operationsResult.operations;
     if (operations && (!operations.user?.active || operations.user.userId !== identity.userId ||
       operations.user.role !== workspace.user.role || operations.permissions?.admin !== (workspace.user.role === 'OWNER'))) {

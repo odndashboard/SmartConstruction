@@ -75,7 +75,7 @@ If a terminal is available, `npm run owner:setup -- --email ... --name ...` prov
 
 For an expired link or forgotten password, the Owner can generate a fresh recovery link from Team. No outgoing email is sent by this operation. Disable an employee in Team when their access should end; reassignment of their existing work is a separate business action.
 
-Recommended starting roles: you as Owner, a trusted supervisor as Manager, enquiry staff as Sales, and site coordinators as Operations. Viewer can read and export all workspace records. All active roles have full workspace visibility.
+Recommended starting roles: you as Owner, a trusted supervisor as Manager, enquiry staff as Sales, and site coordinators as Operations. Dealers use a separate portal to submit leads and follow the status of their own submissions.
 
 ## 6. Verify before staff use real records
 

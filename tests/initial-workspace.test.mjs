@@ -52,7 +52,7 @@ const { GET: dashboardGET } = await import('../app/api/dashboard/route.ts');
 const { GET: workspaceGET } = await import('../app/api/workspace/route.ts');
 const { GET: operationsGET } = await import('../app/api/operations/route.ts');
 const { SERVER_READ_TIMEOUT_MS } = await import('../lib/server-read.ts');
-const { mutateWorkspace } = await import('../lib/server.ts');
+const { getAccountMember, mutateWorkspace } = await import('../lib/server.ts');
 const { proxy } = await import('../proxy.ts');
 const environment = {
   NEXT_PUBLIC_SUPABASE_URL: 'https://crm-tests.invalid',
@@ -366,4 +366,23 @@ test('mutation replays keep the existing receipt path without a read timeout or 
   assert.equal(state.rpcCalls.length, 1);
   assert.equal(state.rpcCalls[0].name, 'crm_mutation_prepare');
   assert.equal(state.rpcCalls[0].signal, undefined);
+});
+
+test('dealer account setup loads only the verified member and rejects a different identity', async () => {
+  const state = reset();
+  state.rpc = () => ({ data: { ...member(OWNER), role: 'DEALER' }, error: null });
+  assert.equal((await getAccountMember()).role, 'DEALER');
+  assert.deepEqual(state.rpcCalls.map(call => [call.name, call.args]), [['crm_account_member', { p_actor_id: OWNER }]]);
+  state.rpc = () => ({ data: { ...member(EMPLOYEE), role: 'DEALER' }, error: null });
+  await assert.rejects(() => getAccountMember(), e => e.status === 403);
+});
+
+test('staff dashboard never returns a workspace or operations snapshot for a dealer', async () => {
+  const state = reset();
+  state.rpc = (name, args) => {
+    const response = resultFor(name, args);
+    response.data.user.role = 'DEALER';
+    return response;
+  };
+  await assert.rejects(() => getInitialWorkspace(), e => e.status === 403 && e.message === 'Use the dealer lead portal.');
 });

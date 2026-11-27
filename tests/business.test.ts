@@ -8,7 +8,7 @@ import type { Company, Member, Role, WorkspaceData, QuoteItemInput } from '../li
 const NOW = new Date('2026-11-23T06:00:00Z');
 
 function workspace(configured = true): WorkspaceData {
-  const members: Member[] = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]).map(role => ({
+  const members: Member[] = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]).map(role => ({
     userId: `test-${role.toLowerCase()}`, name: `Test ${role}`, email: `${role.toLowerCase()}@example.invalid`, role, active: true,
   }));
   return {
@@ -69,8 +69,8 @@ function acceptedQuote(data: WorkspaceData) {
 }
 
 describe('server-side authorization and input boundaries', () => {
-  test('viewers cannot mutate records or settings', () => {
-    const data = workspace(); setRole(data, 'VIEWER');
+  test('dealers cannot mutate records through the core CRM', () => {
+    const data = workspace(); setRole(data, 'DEALER');
     for (const action of ['customer_save', 'lead_save', 'followup_save', 'quote_save', 'quote_issue', 'workorder_save', 'company_save', 'member_role', 'load_demo', 'clear_demo']) {
       expectDenied(() => act(data, action, {}));
     }
@@ -114,16 +114,16 @@ describe('server-side authorization and input boundaries', () => {
 
   test('team changes retain an active owner and cannot demote the acting owner', () => {
     const data = workspace();
-    assert.throws(() => act(data, 'member_role', { userId: data.user.userId, role: 'VIEWER' }), CRMError);
-    act(data, 'member_role', { userId: 'test-viewer', role: 'SALES' });
-    assert.equal(data.members.find(member => member.userId === 'test-viewer')!.role, 'SALES');
+    assert.throws(() => act(data, 'member_role', { userId: data.user.userId, role: 'DEALER' }), CRMError);
+    act(data, 'member_role', { userId: 'test-dealer', role: 'SALES' });
+    assert.equal(data.members.find(member => member.userId === 'test-dealer')!.role, 'SALES');
     assert.equal(data.members.filter(member => member.role === 'OWNER' && member.active).length, 1);
   });
 
   test('owners can assign Accountant and accountants cannot mutate core CRM or team records', () => {
     const data = workspace();
-    act(data, 'member_role', { userId: 'test-viewer', role: 'ACCOUNTANT' });
-    assert.equal(data.members.find(member => member.userId === 'test-viewer')!.role, 'ACCOUNTANT');
+    act(data, 'member_role', { userId: 'test-dealer', role: 'ACCOUNTANT' });
+    assert.equal(data.members.find(member => member.userId === 'test-dealer')!.role, 'ACCOUNTANT');
     setRole(data, 'ACCOUNTANT');
     for (const action of [
       'customer_save', 'lead_save', 'lead_status', 'followup_save', 'followup_complete', 'followup_cancel',
@@ -131,7 +131,7 @@ describe('server-side authorization and input boundaries', () => {
       'workorder_save', 'milestone_add', 'milestone_complete', 'company_save', 'member_role', 'member_active',
       'load_demo', 'clear_demo',
     ]) expectDenied(() => act(data, action, {}));
-    for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+    for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]) {
       const restricted = workspace(); setRole(restricted, role);
       expectDenied(() => act(restricted, 'member_role', { userId: 'test-sales', role: 'ACCOUNTANT' }));
     }
@@ -153,7 +153,7 @@ describe('server-side authorization and input boundaries', () => {
       act(data, 'lead_status', { id: lead.id, status: 'WON' });
       assert.equal(lead.status, 'WON');
     }
-    for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+    for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]) {
       const data = workspace(); const lead = addLead(data); const before = structuredClone(lead);
       setRole(data, role);
       expectDenied(() => act(data, 'lead_status', { id: lead.id, status: 'CONTACTED' }));
@@ -405,7 +405,7 @@ describe('follow-ups, delivery and example records', () => {
 describe('employee activation controls', () => {
   test('only owners can disable or enable employees', () => {
     const data = workspace();
-    for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'VIEWER'] as Role[]) {
+    for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'DEALER'] as Role[]) {
       setRole(data, role);
       expectDenied(() => act(data, 'member_active', { userId: 'test-sales', active: false }));
     }

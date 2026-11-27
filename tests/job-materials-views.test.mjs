@@ -144,7 +144,7 @@ test('closed, paused, planned, example and unauthorised work orders preserve rea
     assert.match(renderToStaticMarkup(tree), /2 nos net used/);
     assert.throws(() => views.materialIssuePayload(stock, record, 'Panels', 'panels', 'store', '1'), /In progress/);
   }
-  for (const role of ['SALES', 'ACCOUNTANT', 'VIEWER']) {
+  for (const role of ['SALES', 'ACCOUNTANT', 'DEALER']) {
     reset(); assert.equal(button(renderPanel({ data: data(role) }), 'Record material use'), undefined);
   }
   for (const role of ['OWNER', 'MANAGER', 'OPERATIONS']) {

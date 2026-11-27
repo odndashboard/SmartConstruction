@@ -148,7 +148,7 @@ test('completed category layouts survive ordinary revision and existing sales/ap
   act(data, 'quote_revise', { id: quote.id }); const revision = data.quotations[1];
   assert.equal(revision.itemSchemaVersion, 2); assert.deepEqual(revision.items.map(item => item.category), REQUIRED_QUOTE_CATEGORIES);
   act(data, 'quote_issue', { id: revision.id });
-  for (const role of ['OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+  for (const role of ['OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]) {
     const denied = workspace(); denied.user = { ...denied.user, role };
     assert.throws(() => act(denied, 'quote_save', input(denied)), error => error instanceof CRMError && error.status === 403);
   }

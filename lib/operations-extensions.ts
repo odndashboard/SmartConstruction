@@ -1,3 +1,4 @@
+import type { SiteAlert } from './site-alerts';
 import type { AttendanceRecord } from './operations-types';
 import type { QuoteItemCategory, WorkspaceData } from './types';
 
@@ -79,6 +80,7 @@ export interface ExpenseReceipt {
   sizeBytes: number; uploadedBy: string; createdAt: string;
 }
 export interface OperationsExtension {
+  materialAlerts?: SiteAlert[];
   sites: ConstructionSite[]; assignments: SiteAssignment[]; shiftRule: ShiftRule;
   attendanceCalendar: ExtendedAttendanceRecord[]; attendanceSummary: AttendanceSummary[];
   siteBalances: SiteStockBalance[]; transfers: StockTransfer[]; returns: StockReturn[];

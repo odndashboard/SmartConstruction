@@ -12,7 +12,7 @@ function workspace(user = owner, revision = 1): WorkspaceData {
 }
 function operations(user = owner): OperationsData {
   return { revision: 1, month: '2026-11', today: '2026-11-24', serverTime: '2026-11-24T04:30:00Z', user: { ...user },
-    permissions: { admin: user.role === 'OWNER', canWrite: user.role !== 'VIEWER' }, stockItems: [], stockMovements: [], attendance: [],
+    permissions: { admin: user.role === 'OWNER', canWrite: user.role !== 'DEALER' }, stockItems: [], stockMovements: [], attendance: [],
     myTodayAttendance: null, myOpenAttendance: null, expenses: [], expenseSummary: null,
     counts: { stockMovements: 0, attendance: 0, expenses: 0 }, historyLimit: 500,
     extension: { sites: [], assignments: [], shiftRule: { configured: false, startLocal: null, endLocal: null, overnight: false, breakMinutes: 0, graceMinutes: 0, version: 0 },

@@ -47,9 +47,9 @@ Missing configuration produces a setup-pending screen. It does not enable demo a
 | Sales | Customer and lead details, follow-ups, draft quotations and revisions; lead status stays unchanged |
 | Operations | Follow-ups, existing work orders, and milestones |
 | Accountant | Read/export CRM records, stock entries, own attendance and own expenses with receipts |
-| Viewer | Read and export records; no changes |
+| Dealer | Submit leads and track the current status of personally submitted leads |
 
-**Core CRM records and stock are shared with active members.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers and Accountants remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
+**Core CRM records and stock are shared with active internal staff. Dealers use a separate lead portal.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers and Accountants remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
 
 Add Lead links a customer using the lead contact or project title and phone. Billing details can be edited from the lead. Sales can add New enquiries and edit their details. Owners and Managers can mark a lead **Won** from the lead form or **Change status**. Lost requires a reason and reopens as New enquiry. Won is final.
 

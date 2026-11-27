@@ -1,7 +1,8 @@
+import type { DocumentStatus, WorkDocumentKey } from './work-documents';
 import type { QuoteItemCategory } from './quotation-categories';
 export type { QuoteItemCategory } from './quotation-categories';
 
-export type Role = 'OWNER' | 'MANAGER' | 'SALES' | 'OPERATIONS' | 'ACCOUNTANT' | 'VIEWER';
+export type Role = 'OWNER' | 'MANAGER' | 'SALES' | 'OPERATIONS' | 'ACCOUNTANT' | 'DEALER';
 export type LeadStatus = 'NEW' | 'CONTACTED' | 'SITE_VISIT' | 'QUOTED' | 'NEGOTIATION' | 'WON' | 'LOST';
 export type QuoteStatus = 'DRAFT' | 'ISSUED' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'SUPERSEDED';
 export type WorkStatus = 'PLANNED' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED';
@@ -55,6 +56,7 @@ export interface WorkOrder {
   id: string; leadId?: string; quoteId: string | null; number: string; title: string; customerName: string; siteAddress: string;
   owner: string; startDate: string; endDate: string; status: WorkStatus; snapshot: Quotation | null;
   expectedKw?: number | null; automaticForLead?: boolean;
+  paperDocuments?: Partial<Record<WorkDocumentKey, DocumentStatus>>;
   milestones: Milestone[]; isDemo: boolean; createdAt: string; updatedAt: string;
 }
 export interface AuditEvent {
@@ -73,4 +75,4 @@ export const LEAD_STAGES: {value:LeadStatus;label:string}[] = [
   {value:'NEW',label:'New enquiry'}, {value:'CONTACTED',label:'Contacted'}, {value:'SITE_VISIT',label:'Site visit'},
   {value:'QUOTED',label:'Quoted'}, {value:'NEGOTIATION',label:'Negotiation'}, {value:'WON',label:'Won'}, {value:'LOST',label:'Lost'},
 ];
-export const ROLE_LABELS: Record<Role,string> = {OWNER:'Owner',MANAGER:'Manager',SALES:'Sales',OPERATIONS:'Operations',ACCOUNTANT:'Accountant',VIEWER:'Viewer'};
+export const ROLE_LABELS: Record<Role,string> = {OWNER:'Owner',MANAGER:'Manager',SALES:'Sales',OPERATIONS:'Operations',ACCOUNTANT:'Accountant',DEALER:'Dealer'};

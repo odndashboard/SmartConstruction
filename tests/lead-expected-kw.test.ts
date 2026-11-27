@@ -7,7 +7,7 @@ import type { Member, Role, WorkspaceData } from '../lib/types.ts';
 
 const NOW = new Date('2026-11-27T06:00:00Z');
 function workspace(role: Role = 'OWNER'): WorkspaceData {
-  const members: Member[] = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]).map(value => ({
+  const members: Member[] = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]).map(value => ({
     userId: `test-${value.toLowerCase()}`, name: `Test ${value}`, email: `${value.toLowerCase()}@example.invalid`, role: value, active: true,
   }));
   return {
@@ -102,7 +102,7 @@ describe('lead enquiry entry without customer selection', () => {
       const data = workspace(role); act(data, 'lead_save', { title: `${role} enquiry`, expectedKw: 5.5 });
       assert.equal(data.leads[0].expectedKw, 5.5); assert.equal(data.leads[0].status, 'NEW');
     }
-    for (const role of ['OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+    for (const role of ['OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]) {
       const data = workspace(role); const before = structuredClone(data);
       assert.throws(() => act(data, 'lead_save', { title: 'Not permitted', expectedKw: 5 }), error => error instanceof CRMError && error.status === 403);
       assert.deepEqual(data, before);

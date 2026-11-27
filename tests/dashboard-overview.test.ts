@@ -19,7 +19,7 @@ function workspace(user = owner): WorkspaceData {
 }
 function operations(user = owner): OperationsData {
   return { revision: 0, month: '2026-11', today: '2026-11-24', serverTime: now.toISOString(), user: { ...user },
-    permissions: { admin: user.role === 'OWNER', canWrite: user.role !== 'VIEWER' }, stockItems: [], stockMovements: [], attendance: [],
+    permissions: { admin: user.role === 'OWNER', canWrite: user.role !== 'DEALER' }, stockItems: [], stockMovements: [], attendance: [],
     myTodayAttendance: null, myOpenAttendance: null, expenses: [],
     expenseSummary: user.role === 'OWNER' ? { month: { ...emptyTotals }, allTime: { ...emptyTotals } } : null,
     counts: { stockMovements: 0, attendance: 0, expenses: 0 }, historyLimit: 500,
@@ -121,7 +121,7 @@ test('payment overview counts provisional accounts without turning unknown contr
 });
 
 test('employee, Manager and Accountant summaries do not expose elevated financial, team or attendance aggregates', () => {
-  for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+  for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]) {
     const person = { ...employee, role }, data = workspace(person), ops = operations(person);
     ops.extension.attendanceCalendar = [attendance(person.userId), attendance(owner.userId)];
     ops.extension.attendanceSummary = [summary(person.userId, 100), summary(owner.userId, 9000)];

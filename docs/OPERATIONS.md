@@ -18,30 +18,30 @@ Dashboard, Team activity and operations browser reads have a 15-second deadline,
 
 ## Access rules
 
-| Action | Owner/admin | Manager, Sales, Operations, Accountant | Viewer |
-| --- | --- | --- | --- |
-| View stock and its movement history | Yes | Yes | Yes |
-| Create a stock item; record stock in/out | Yes | Yes | No |
-| Edit existing stock details; correct a balance; archive an empty item | Yes | No | No |
-| View attendance | Entire team | Own records | Own records |
-| Check in and check out | Own account | Own account | No |
-| Correct attendance or mark leave/absence | Any team member | No | No |
-| Enter an expense | Own account | Own account | No |
-| View expenses | All employees | Own entries only | Own entries only |
-| Approve, reject or mark an expense paid | Yes | No | No |
-| View company expense totals | Yes | No | No |
-| View team activity and audit history | Yes | No | No |
-| Create/archive construction sites; assign employees | Yes | No | No |
-| Configure shift rules and approve overtime | Yes | No | No |
-| View monthly attendance calendar and summary | Entire team | Own records | Own records |
-| Transfer stock and return unused material | Yes | Yes | No |
-| Submit material requests | Any active site | Own assigned site | No |
-| Review/fulfil material requests; manage purchase orders | Yes | No | No |
-| Attach/remove receipts on editable own expenses | Yes | Yes | No |
-| View saved expense receipts | All employees | Own expenses | Own expenses |
-| Record/view/export customer payment balances | Yes | No | No |
+| Action | Owner/admin | Manager, Sales, Operations, Accountant |
+| --- | --- | --- |
+| View stock and its movement history | Yes | Yes |
+| Create a stock item; record stock in/out | Yes | Yes |
+| Edit existing stock details; correct a balance; archive an empty item | Yes | No |
+| View attendance | Entire team | Own records |
+| Check in and check out | Own account | Own account |
+| Correct attendance or mark leave/absence | Any team member | No |
+| Enter an expense | Own account | Own account |
+| View expenses | All employees | Own entries only |
+| Approve, reject or mark an expense paid | Yes | No |
+| View company expense totals | Yes | No |
+| View team activity and audit history | Yes | No |
+| Create/archive construction sites; assign employees | Yes | No |
+| Configure shift rules and approve overtime | Yes | No |
+| View monthly attendance calendar and summary | Entire team | Own records |
+| Transfer stock and return unused material | Yes | Yes |
+| Submit material requests | Any active site | Own assigned site |
+| Review/fulfil material requests; manage purchase orders | Yes | No |
+| Attach/remove receipts on editable own expenses | Yes | Yes |
+| View saved expense receipts | All employees | Own expenses |
+| Record/view/export customer payment balances | Yes | No |
 
-Every operation requires an active, confirmed CRM membership. Removing a member blocks these modules as well as the original CRM. A role selected in the interface or passed in a request never establishes authority.
+Dealers use their own lead portal. The operations listed above are available to internal staff with active, confirmed CRM memberships. Removing a member blocks these modules as well as the original CRM. A role selected in the interface or passed in a request never establishes authority.
 
 ## Stock
 
@@ -100,6 +100,10 @@ The storage bucket is private, with no direct anon/authenticated read or write p
 ## Stock used on a job
 
 Open **Work orders → Job items** on an In progress order. Choose the job category, stock item, source location and the quantity actually used in the stock item's unit. Each issue appears in the stock movement history and against the work order. To return unused material, use **Stock → Returns** against the original issue. The job history includes returned quantities. Filing has a separate completion action. Placing work on hold or closing the order preserves the history.
+
+Any active internal team member visiting an In progress project can open **Work orders → Add stock item** to report a shortage. Select a stock item or enter its name, then choose the person responsible for following up. The **Alerts** tab lists open and resolved reports by project. The assignee, Owner or Manager can mark a report resolved. Reporting and resolving an alert leave stock balances intact.
+
+On a work order, open **Documents** beside **Change status**. Each of the seven documents has its own Pending or Received status. Owners, Managers and Operations can update the checklist, including on completed orders. Existing orders start with each document shown as Pending until staff record receipt.
 
 ## Customer payments
 

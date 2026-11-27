@@ -958,11 +958,11 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await bootstrap();
     await addMember(ids.sales, 'sales', 'SALES');
     const pending = plan(await read(ids.sales), 'customer_save', { name: 'Stale sales change' });
-    await mutate('member_role', { userId: ids.sales, role: 'VIEWER' });
+    await mutate('member_role', { userId: ids.sales, role: 'ACCOUNTANT' });
     await rejectsSql(() => commit(pending), ['PT403', 'PT409']);
     const data = await read();
     assert.equal(data.customers.length, 0);
-    assert.equal(data.members.find(member => member.userId === ids.sales)?.role, 'VIEWER');
+    assert.equal(data.members.find(member => member.userId === ids.sales)?.role, 'ACCOUNTANT');
   });
 
   test('inactive and banned members cannot read, write, replay receipts, or receive recovery links', async () => {

@@ -9,7 +9,7 @@ import type { Quotation, Role, WorkspaceData } from '../lib/types.ts';
 
 const now = new Date('2026-11-27T06:00:00Z');
 function workspace(): WorkspaceData {
-  const members = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]).map(role => ({
+  const members = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]).map(role => ({
     userId: `test-${role}`, name: role, email: `${role}@example.invalid`, role, active: true,
   }));
   return { revision: 1, company: { ...DEFAULT_COMPANY, legalName: 'Test supplier', address: 'Supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06' },
@@ -48,7 +48,7 @@ test('Owner and Manager can expire early and reopen without changing commercial 
 });
 
 test('Sales, Operations, Accountant, Viewer and inactive admins cannot expire or reopen', () => {
-  for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+  for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]) {
     const data = workspace(); const quote = issued(data);
     data.user = { ...data.members.find(member => member.role === role)! };
     for (const action of ['quote_expire', 'quote_reopen']) {

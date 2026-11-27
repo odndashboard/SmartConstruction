@@ -12,6 +12,7 @@ export default async function Home() {
   let initial: InitialWorkspace | null = null;
   try { initial = await getInitialWorkspace(); }
   catch (error) {
+    if (error instanceof CRMError && error.status === 403 && error.message === 'Use the dealer lead portal.') redirect('/dealer');
     if (error instanceof CRMError && [401, 403].includes(error.status)) redirect('/login');
   }
   if (!initial) return <CRMApp initialError="Your workspace could not be loaded. Check your connection and try again." />;

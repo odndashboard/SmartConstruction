@@ -6,7 +6,7 @@ import type { Role, WorkspaceData } from '../lib/types.ts';
 
 const now = new Date('2026-11-24T06:00:00Z');
 function fixture() {
-  const members = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]).map(role => ({
+  const members = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]).map(role => ({
     userId: `test-${role}`, name: role, email: `${role}@example.invalid`, role, active: true,
   }));
   const data: WorkspaceData = {
@@ -39,7 +39,7 @@ test('Owner and Manager can update status, record a lost reason and reopen as Ne
 });
 
 test('Sales, Operations, Accountant and Viewer cannot use the dedicated lead status action', () => {
-  for (const value of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]) {
+  for (const value of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]) {
     const { data, lead } = fixture(); role(data, value); const before = structuredClone(lead);
     denied(() => applyAction(data, 'lead_status', { id: lead.id, status: 'CONTACTED' }, now));
     denied(() => applyAction(data, 'lead_status', { id: lead.id, status: 'WON' }, now));

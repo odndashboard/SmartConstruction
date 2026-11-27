@@ -1,6 +1,6 @@
 import { createAuthClient } from '@/lib/supabase/server';
 import { readAuthInput, authResponse, authError } from '@/lib/auth-http';
-import { getWorkspace, CRMError } from '@/lib/server';
+import { getAccountMember, CRMError } from '@/lib/server';
 import { changeOwnPassword, changePasswordSchema, PasswordChangeError } from '@/lib/password-policy';
 import { clearPasswordSetup } from '@/lib/password-setup';
 
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     client = await createAuthClient();
     const auth = client.auth;
     await changeOwnPassword(input, {
-      currentMember: async () => (await getWorkspace()).user,
+      currentMember: getAccountMember,
       reauthenticate: async (email, password) => {
         const { data, error } = await auth.signInWithPassword({ email, password });
         if (error || !data.user?.email || !data.user.email_confirmed_at || data.user.is_anonymous) {

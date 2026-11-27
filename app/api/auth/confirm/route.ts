@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { createAuthClient } from '@/lib/supabase/server';
 import { readAuthInput, authResponse, authError } from '@/lib/auth-http';
-import { getWorkspace, CRMError } from '@/lib/server';
+import { getAccountMember, CRMError } from '@/lib/server';
 import { ACCOUNT_TOKEN_PATTERN } from '@/lib/auth-policy';
 import { clearPasswordSetup, grantPasswordSetup } from '@/lib/password-setup';
 
@@ -17,8 +17,8 @@ export async function POST(request: Request) {
     const { error } = await client.auth.verifyOtp(input);
     if (error) throw new CRMError('This account link has expired or has already been used. Ask your workspace owner for a new one.', 400);
     try {
-      const workspace = await getWorkspace();
-      await grantPasswordSetup(client, workspace.user.userId);
+      const member = await getAccountMember();
+      await grantPasswordSetup(client, member.userId);
     }
     catch (workspaceError) {
       await client.auth.signOut({ scope: 'local' });

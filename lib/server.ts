@@ -2,7 +2,7 @@ import 'server-only';
 import { z } from 'zod';
 import { authenticate } from './auth';
 import { createAdminClient } from './supabase/admin';
-import type { WorkspaceData } from './types';
+import type { Member, WorkspaceData } from './types';
 import { applyAction, assertActionRole, CRMError } from './server-actions';
 import { assertReadActive, runServerRead, type ServerReadOptions } from './server-read';
 export { CRMError } from './server-actions';
@@ -39,6 +39,15 @@ async function rpc<T>(name: string, args: Record<string, unknown>, signal?: Abor
   if (error) throw databaseError(error);
   if (data == null) throw new CRMError('The workspace database returned an empty response.', 503);
   return data as T;
+}
+
+export async function getAccountMember(options: ServerReadOptions = {}): Promise<Member> {
+  return runServerRead('workspace', options, async read => {
+    const identity = await read.stage('auth', signal => authenticate(signal));
+    const member = await read.stage('workspace', signal => rpc<Member>('crm_account_member', { p_actor_id: identity.userId }, signal));
+    if (!member.active || member.userId !== identity.userId) throw new CRMError('Your account access changed. Please sign in again.', 403);
+    return member;
+  });
 }
 
 /** No login bootstrap: an Owner must explicitly invite every employee. */

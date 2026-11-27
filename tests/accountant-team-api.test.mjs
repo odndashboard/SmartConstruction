@@ -84,7 +84,7 @@ test('owner can create an Accountant account link with the exact role and verifi
 });
 
 test('nonowners and inactive owners cannot create an Accountant account or link', async () => {
-  for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER', 'OWNER']) {
+  for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER', 'OWNER']) {
     const state = reset(); state.workspace.user.role = role;
     if (role === 'OWNER') state.workspace.user.active = false;
     const response = await POST(addRequest());
@@ -93,6 +93,15 @@ test('nonowners and inactive owners cannot create an Accountant account or link'
     assert.equal(state.invites.length, 0);
     assert.equal(state.grants.length, 0);
   }
+});
+
+test('owner can create the separate Dealer role and the retired Viewer role is rejected', async () => {
+  const state = globalThis[key];
+  assert.equal((await POST(addRequest('DEALER'))).status, 200);
+  assert.equal(state.grants[0].args.p_role, 'DEALER');
+  reset();
+  assert.equal((await POST(addRequest('VIEWER'))).status, 400);
+  assert.equal(globalThis[key].clientCalls, 0);
 });
 
 test('unsupported and Owner roles remain invalid in the employee invitation endpoint', async () => {

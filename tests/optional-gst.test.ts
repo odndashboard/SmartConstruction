@@ -184,7 +184,7 @@ test('No GST calculations retain exact rounding and validation without mutating 
 test('optional GST does not change who may issue or accept quotations', () => {
   const data = workspace(); act(data, 'quote_save', { ...input(data), gstEnabled: false });
   const quote = data.quotations[0];
-  for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as const) {
+  for (const role of ['SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as const) {
     data.user.role = role;
     for (const action of ['quote_issue', 'quote_accept']) {
       assert.throws(() => act(data, action, action === 'quote_accept' ? { id: quote.id, acceptanceNote: 'Customer approval' } : { id: quote.id }), error => error instanceof CRMError && error.status === 403);

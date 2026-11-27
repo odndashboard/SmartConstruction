@@ -7,7 +7,7 @@ import type { Role, WorkspaceData } from '../lib/types.ts';
 
 const now = new Date('2026-11-27T06:00:00Z');
 function workspace(): WorkspaceData {
-  const members = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER'] as Role[]).map(role => ({
+  const members = (['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER'] as Role[]).map(role => ({
     userId: `test-${role}`, name: role, email: `${role}@example.invalid`, role, active: true,
   }));
   return { revision: 1, company: { ...DEFAULT_COMPANY, legalName: 'Test supplier', address: 'Supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06' },
@@ -98,7 +98,7 @@ test('delivery roles can reopen Completed using only its status and preserve the
     assert.deepEqual(order, { ...previous, status: 'ACTIVE', updatedAt: order.updatedAt });
     assert.match(data.activity[0].description, /Completed → In progress/);
     assert.equal(data.leads[0].status, 'WON');
-    for (const restrictedRole of ['ACCOUNTANT', 'SALES', 'VIEWER']) {
+    for (const restrictedRole of ['ACCOUNTANT', 'SALES', 'DEALER']) {
       data.user = { ...data.members.find(member => member.role === restrictedRole)!, active: true };
       assert.throws(() => act(data, 'workorder_save', { id: order.id, status: 'ON_HOLD' }), (error: unknown) => error instanceof CRMError && error.status === 403);
     }

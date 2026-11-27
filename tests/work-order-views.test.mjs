@@ -5,6 +5,8 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
+import { SITE_ALERT_ROLES } from '../lib/site-alerts.ts';
+import { DOCUMENT_KEYS, DOCUMENT_NAMES } from '../lib/work-documents.ts';
 import { WORK_LABELS, WORK_TRANSITIONS } from '../lib/work-order-status.ts';
 import { canRecordWorkOrderPayment } from '../lib/work-order-payments.ts';
 import { REQUIRED_QUOTE_CATEGORIES } from '../lib/quotation-categories.ts';
@@ -28,11 +30,11 @@ function loadFunctions(path, names, helpers = {}) {
 const blank = () => null;
 const wrapper = ({ children }) => React.createElement('span', null, children);
 const helpers = {
-  Badge: wrapper, DemoTag: blank, IconButton: wrapper, Avatar: blank, Notes: wrapper, FollowupRow: blank,
+  WorkDocuments: ({ statusAction }) => React.createElement('div', null, React.createElement('button', null, 'Documents'), statusAction), Badge: wrapper, DemoTag: blank, IconButton: wrapper, Avatar: blank, Notes: wrapper, FollowupRow: blank,
   Plus: blank, MoreHorizontal: blank, CalendarDays: blank, HardHat: () => null, ArrowUpRight: blank,
   Pencil: blank, Check: blank, CircleAlert: blank, FileText: blank, ChevronRight: blank,
   RefreshCw: blank, ArrowRight: blank, Printer: blank, CheckCircle2: blank, ChevronDown: blank,
-  WORK_LABELS, WORK_TRANSITIONS, canRecordWorkOrderPayment, IndianRupee: blank, Package: blank,
+  SITE_ALERT_ROLES, WORK_LABELS, WORK_TRANSITIONS, canRecordWorkOrderPayment, IndianRupee: blank, Package: blank,
   QUOTE_LABELS: { ACCEPTED: 'Accepted' },
   ownerName: () => 'Project owner', displayDate: value => value || 'Not scheduled',
   formatINR: value => `₹${(value / 100).toFixed(2)}`, leadLabel: value => value, stateLabel: value => value,
@@ -166,6 +168,28 @@ test('the job opens from active site work, and planned jobs do not issue stock',
   assert.doesNotMatch(render('WorkCard', { item: { ...unquoted, status: 'ACTIVE', isDemo: true }, data: workspace(), open() {} }), /Job items/);
 });
 
+test('every active team role can report a missing item for the selected in-progress work order', () => {
+  const order = { ...unquoted, status: 'ACTIVE' };
+  const opened = [];
+  for (const role of ['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT']) {
+    const data = { ...workspace([order]), user: { role, active: true } };
+    for (const view of ['WorkCard', 'WorkDetail']) {
+      assert.match(render(view, { item: order, data, open() {}, mutate() {} }), /Add stock item/);
+    }
+    const actions = views.WorkActions({ item: order, data, open: target => opened.push(target) });
+    const button = children(actions).find(node => node.type === 'button' && React.Children.toArray(node.props.children).includes('Add stock item'));
+    button.props.onClick();
+    assert.deepEqual(opened.pop(), { type: 'stock_alert', id: order.id });
+  }
+  const data = { ...workspace(), user: { role: 'SALES', active: true } };
+  assert.doesNotMatch(render('WorkCard', { item: order, data: { ...data, user: { role: 'DEALER', active: true } }, open() {} }), /Add stock item/);
+  for (const status of ['PLANNED', 'ON_HOLD', 'COMPLETED', 'CANCELLED']) {
+    assert.doesNotMatch(render('WorkCard', { item: { ...order, status }, data, open() {} }), /Add stock item/);
+  }
+  assert.doesNotMatch(render('WorkCard', { item: { ...order, isDemo: true }, data, open() {} }), /Add stock item/);
+  assert.doesNotMatch(render('WorkCard', { item: order, data: { ...data, user: { role: 'OWNER', active: false } }, open() {} }), /Add stock item/);
+});
+
 test('changing the completed order in the status form saves only its ID and new status', async () => {
   const order = { ...quoted, status: 'COMPLETED' };
   const calls = [];
@@ -223,4 +247,30 @@ test('payment entry supports advances for Won lead work orders and excludes canc
   assert.equal(canRecord(workspace([{ ...unquoted, isDemo: true }]), unquoted.id), false);
   assert.equal(canRecord({ ...workspace(), leads: [{ ...lead, status: 'NEW' }] }, unquoted.id), false);
   assert.equal(canRecord({ ...workspace(), leads: [] }, unquoted.id), false);
+});
+
+test('Documents expands in place before Change status, showing seven independent status controls', () => {
+  let expanded = false;
+  const { WorkDocuments } = loadFunctions('../components/WorkDocuments.tsx', ['WorkDocuments'], {
+    useId: () => 'docs', useState: () => [expanded, next => { expanded = next; }],
+    DOCUMENT_KEYS, DOCUMENT_NAMES, Files: blank, ChevronDown: blank, styles: {},
+  });
+  const item = { ...unquoted, status: 'ACTIVE', paperDocuments: { panCard: 'RECEIVED' } };
+  const changes = [];
+  const data = { ...workspace([item]), user: { role: 'OWNER', active: true } };
+  const card = render('WorkCard', { item, data, open() {}, mutate() {} });
+  assert.ok(card.indexOf('Documents') >= 0 && card.indexOf('Documents') < card.indexOf('Change status'));
+  const props = { item, editable: true, busy: false, onChange: (...args) => changes.push(args) };
+  const initial = WorkDocuments(props);
+  assert.doesNotMatch(renderToStaticMarkup(initial), /Bank passbook/);
+  children(initial).find(node => node.props['aria-controls'] === 'docs').props.onClick();
+  const tree = WorkDocuments(props);
+  const groups = children(tree).filter(node => node.props.role === 'group');
+  assert.deepEqual(groups.map(g => g.props['aria-label']), DOCUMENT_KEYS.map(key => DOCUMENT_NAMES[key]));
+  const buttons = group => children(group).filter(node => node.type === 'button');
+  assert.deepEqual(buttons(groups[4]).map(b => b.props['aria-pressed']), [false, true]);
+  assert.deepEqual(buttons(groups[2]).map(b => b.props['aria-pressed']), [true, false]);
+  buttons(groups[2])[1].props.onClick();
+  assert.deepEqual(changes, [['photo', 'RECEIVED']]);
+  assert.doesNotMatch(renderToStaticMarkup(WorkDocuments({ ...props, editable: false })), /aria-pressed|<select/);
 });

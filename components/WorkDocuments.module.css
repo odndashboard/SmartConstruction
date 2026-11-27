@@ -1,0 +1,14 @@
+.actions { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+.panel { order: 1; flex: 0 0 100%; min-width: 0; border-top: 1px solid var(--border, #dce4eb); }
+.row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 8px 0; color: #30495b; font-size: 13px; }
+.row + .row { border-top: 1px solid #e8edf1; }
+.choices { display: inline-flex; border: 1px solid #cbd6de; border-radius: 7px; overflow: hidden; }
+.choices button { background: #fff; border: 0; cursor: pointer; color: #526571; padding: 7px 9px; font: inherit; font-size: 12px; }
+.choices button:focus-visible { outline: 2px solid #255b8a; outline-offset: -2px; }
+.choices button[aria-pressed=true] { background: #f7edcc; color: #6a4c09; font-weight: 650; }
+.choices button[data-value=RECEIVED][aria-pressed=true] { background: #e1f2e7; color: #20653b; }
+.choices button:disabled { cursor: wait; }
+.status { font-size: 12px; color: #6a4c09; }
+.status[data-value=RECEIVED] { color: #20653b; }
+.up { transform: rotate(180deg); }
+@media (max-width: 600px) { .choices button { min-height: 40px; } }

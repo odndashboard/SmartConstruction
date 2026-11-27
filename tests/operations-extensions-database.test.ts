@@ -8,6 +8,7 @@ import type { WorkspaceData } from '../lib/types.ts';
 import type { OperationsData } from '../lib/operations-types.ts';
 import type { ExpenseReceipt, OperationsExtension } from '../lib/operations-extensions.ts';
 import { completeQuoteItems } from './fixtures/quotation-items.ts';
+import type { SiteAlertsData, SiteAlertMutationResult } from '../lib/site-alerts.ts';
 
 const ids = {
   owner: '20000000-0000-4000-8000-000000000001', manager: '20000000-0000-4000-8000-000000000002',
@@ -17,7 +18,7 @@ const ids = {
   anonymous: '20000000-0000-4000-8000-000000000009', banned: '20000000-0000-4000-8000-000000000010',
   accountant: '20000000-0000-4000-8000-000000000011',
 };
-const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql', '20261127072310_won_lead_workorders.sql', '20261127082025_quotation_approval_status.sql', '20261127101206_payments_optional_gst_reopen_work.sql', '20261127102202_required_quotation_items.sql', '20261127102917_work_order_job_materials.sql'];
+const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql', '20261127072310_won_lead_workorders.sql', '20261127082025_quotation_approval_status.sql', '20261127101206_payments_optional_gst_reopen_work.sql', '20261127102202_required_quotation_items.sql', '20261127102917_work_order_job_materials.sql', '20261127104621_assigned_missing_stock_alerts.sql'];
 let db: PGlite;
 let today: string;
 let month: string;
@@ -57,6 +58,14 @@ async function read(actor = ids.owner, selectedMonth = month): Promise<Operation
 async function jobRead(workOrderId:string,actor=ids.owner,selectedMonth=month):Promise<OperationsData>{
   return query('SELECT public.crm_job_materials_read($1::uuid,$2,$3) AS result',[actor,selectedMonth,workOrderId]);
 }
+async function alertRead(actor=ids.owner,workOrderId:string|null=null,status='OPEN',page=1,search=''):Promise<SiteAlertsData>{
+  return query('SELECT public.crm_material_alerts_read($1::uuid,$2,$3,$4::int,$5) AS result',[actor,workOrderId,status,page,search]);
+}
+async function alertCommit(r:ReturnType<typeof request>,workOrderId:string|null=null,status='OPEN',page=1,search=''):Promise<SiteAlertMutationResult>{
+  return query('SELECT public.crm_material_alerts_mutate($1::uuid,$2::bigint,$3,$4,$5,$6::jsonb,$7,$8,$9::int,$10) AS result',
+    [r.actor,r.revision,r.requestId,r.action,r.hash,JSON.stringify(r.payload),workOrderId,status,page,search]);
+}
+async function alertMutate(action:string,payload:unknown,actor=ids.owner){return alertCommit(request(action,payload,(await alertRead(actor)).revision,actor));}
 function request(action: string, payload: unknown, revision: number, actor = ids.owner, requestId = crypto.randomUUID()) {
   return { action, payload, revision, actor, requestId, month, hash: createHash('sha256').update(JSON.stringify({ action, payload })).digest('hex') };
 }
@@ -101,7 +110,8 @@ async function state() {
   const result = await query(`SELECT jsonb_build_object('revision',(SELECT revision FROM crm.operations_state),'moves',(SELECT count(*) FROM crm.stock_movements),
     'transfers',(SELECT count(*) FROM crm.stock_transfers),'returns',(SELECT count(*) FROM crm.stock_returns),'orders',(SELECT count(*) FROM crm.purchase_orders),
     'lines',(SELECT count(*) FROM crm.purchase_order_lines),'audit',(SELECT count(*) FROM crm.operations_audit),'receipts',(SELECT count(*) FROM crm.operations_receipts),
-    'jobEntries',(SELECT count(*) FROM crm.job_material_entries)) AS result`);
+    'jobEntries',(SELECT count(*) FROM crm.job_material_entries),'alerts',(SELECT count(*) FROM crm.material_alerts),
+    'resolvedAlerts',(SELECT count(*) FROM crm.material_alerts WHERE status='RESOLVED')) AS result`);
   await role('service_role'); return result;
 }
 async function core(action: string, payload: unknown) {
@@ -389,6 +399,131 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     await role('postgres'); await db.exec('UPDATE crm.operations_state SET purchase_sequence=999999 WHERE id=1'); await role('service_role');
     const expanded = (await mutate('purchase_order_create', { supplier: 'Expanded numbering', siteId: a.id, lines: [{ itemId: first.id, quantity: '1' }] })).data.extension.purchaseOrders!.find(row => row.supplier === 'Expanded numbering')!;
     assert.equal(expanded.number, 'SC/PO/1000000');
+  });
+
+  test('working roles report assigned missing stock with real identities and no stock or work-order changes',async()=>{
+    const order=await activeJob(); const other=await activeJob(); const material=await item('0');
+    const before=await read(); const workspace=await query<WorkspaceData>('SELECT public.crm_workspace_read($1::uuid,true) AS result',[ids.owner]);
+    for(const actor of [ids.owner,ids.manager,ids.sales,ids.operations,ids.accountant]) {
+      const req=request('material_alert_create',{workOrderId:order.id,itemId:material.id,assigneeId:ids.operations,quantity:'3.125',note:'Needed at the roof'},(await alertRead(actor)).revision,actor);
+      const result=await alertCommit(req,order.id); const alert=result.data.alerts.find(row=>row.reportedBy===actor)!;
+      assert.deepEqual([alert.workOrderNumber,alert.itemId,alert.itemName,alert.quantityMilli,alert.unit,alert.assigneeId,alert.reportedBy,alert.status],
+        [order.number,material.id,material.name,3125,material.unit,ids.operations,actor,'OPEN']);
+      const saved=await state(); await alertCommit(req); assert.deepEqual(await state(),saved);
+    }
+    const free=(await alertMutate('material_alert_create',{workOrderId:order.id,itemName:'Uncatalogued MC4 connector',assigneeId:ids.accountant},ids.sales)).data.alerts[0];
+    assert.deepEqual([free.itemId,free.quantityMilli,free.unit],[null,null,'']);
+    const after=await read();
+    assert.deepEqual(after.stockItems,before.stockItems); assert.deepEqual(after.stockMovements,before.stockMovements); assert.deepEqual(after.extension.siteBalances,before.extension.siteBalances);
+    assert.deepEqual(await query<WorkspaceData>('SELECT public.crm_workspace_read($1::uuid,true) AS result',[ids.owner]),workspace);
+    assert.deepEqual(after.extension.materialAlerts,[],'Routine operations reads do not serialize alert history');
+    assert.equal((await alertRead(ids.sales,order.id)).total,6); assert.equal((await alertRead(ids.sales,other.id)).total,0);
+    const directory=await alertRead(ids.accountant);
+    assert.deepEqual(directory.assignees.map(row=>row.userId).sort(),[ids.owner,ids.manager,ids.sales,ids.operations,ids.accountant].sort());
+    assert.ok(directory.assignees.every(row=>Object.keys(row).sort().join(',')==='name,role,userId'));
+    assert.deepEqual(directory.stockItems,[{id:material.id,name:material.name,unit:material.unit}]);
+    assert.ok(directory.workOrders.some(row=>row.id===order.id));
+    assert.equal((await exported(ids.sales)).extension.materialAlerts?.length,6);
+    assert.equal((await exported(ids.viewer)).extension.materialAlerts?.length,0);
+  });
+
+  test('missing-stock alerts require active work and eligible assignment and reject malformed or ambiguous item details atomically',async()=>{
+    const order=await activeJob(); const material=await item('0');
+    const payload={workOrderId:order.id,itemName:'Missing material',assigneeId:ids.operations}; const before=await state();
+    for(const assigneeId of [ids.viewer,ids.removed,ids.pending,ids.anonymous,ids.banned,ids.outsider,crypto.randomUUID()]) await rejects(()=>alertMutate('material_alert_create',{...payload,assigneeId},ids.sales),'PT400');
+    for(const invalid of [{...payload,assigneeId:undefined},{...payload,itemName:''},{...payload,reportedBy:ids.owner},
+      {...payload,quantity:'1'},{...payload,quantity:'0',unit:'m'},{...payload,quantity:'-1',unit:'m'},
+      {...payload,quantity:'1.0001',unit:'m'},{...payload,quantity:'9000000000.001',unit:'m'},
+      {...payload,itemId:material.id},{...payload,itemId:crypto.randomUUID(),itemName:''},{...payload,itemId:material.id,itemName:'',unit:'Fake unit'}]) {
+      await rejects(()=>alertMutate('material_alert_create',invalid,ids.accountant),'PT400');
+    }
+    assert.deepEqual(await state(),before);
+    await mutate('stock_item_active',{id:material.id,active:false});
+    await rejects(()=>alertMutate('material_alert_create',{...payload,itemId:material.id,itemName:''}),'PT400');
+    const prepared=request('material_alert_create',payload,(await alertRead()).revision,ids.sales);
+    await core('workorder_save',{id:order.id,status:'ON_HOLD'}); await rejects(()=>alertCommit(prepared),'PT409');
+    await core('workorder_save',{id:order.id,status:'ACTIVE'});
+    const reported=await alertCommit(prepared); const id=reported.data.alerts[0].id;
+    await core('workorder_save',{id:order.id,status:'COMPLETED'});
+    await rejects(()=>alertMutate('material_alert_create',payload),'PT409');
+    assert.equal((await alertCommit(prepared)).data.alerts[0].id,id,'A successful retry is still safe after work closes');
+    await core('workorder_save',{id:order.id,status:'ACTIVE'}); await core('workorder_save',{id:order.id,status:'CANCELLED'});
+    await rejects(()=>alertMutate('material_alert_create',payload),'PT409');
+    const planned=(await core('lead_save',{title:'Not yet active alert site',status:'WON'})).data.workorders.find(row=>!row.isDemo&&row.status==='PLANNED')!;
+    await rejects(()=>alertMutate('material_alert_create',{...payload,workOrderId:planned.id}),'PT409');
+    await core('load_demo',{});
+    const demo=(await query<WorkspaceData>('SELECT public.crm_workspace_read($1::uuid,true) AS result',[ids.owner])).workorders.find(row=>row.isDemo)!;
+    await rejects(()=>alertMutate('material_alert_create',{...payload,workOrderId:demo.id}),'PT404');
+    await rejects(()=>alertRead(ids.owner,demo.id),'PT404');
+  });
+
+  test('only assignee or Owner/Manager resolves alerts, preserving original report and current replay authorization',async()=>{
+    const order=await activeJob(); const created=(await alertMutate('material_alert_create',{workOrderId:order.id,itemName:'Needed cable',quantity:'2',unit:'m',assigneeId:ids.operations},ids.sales)).data.alerts[0];
+    for(const actor of [ids.sales,ids.accountant]) await rejects(()=>alertMutate('material_alert_resolve',{id:created.id},actor),'PT403');
+    await core('workorder_save',{id:order.id,status:'COMPLETED'});
+    const req=request('material_alert_resolve',{id:created.id},(await alertRead(ids.operations)).revision,ids.operations);
+    const resolved=(await alertCommit(req,null,'ALL')).data.alerts[0];
+    assert.deepEqual(resolved,{...created,status:'RESOLVED',resolvedAt:resolved.resolvedAt,resolvedBy:ids.operations,resolvedByName:'operations'});
+    assert.ok(resolved.resolvedAt); const saved=await state(); await alertCommit(req); assert.deepEqual(await state(),saved);
+    await rejects(()=>alertMutate('material_alert_resolve',{id:created.id},ids.owner),'PT409');
+    await role('postgres');
+    await rejects(()=>db.query('UPDATE crm.material_alerts SET note=$2 WHERE id=$1',[created.id,'Edited report']),'PT403');
+    await rejects(()=>db.query('DELETE FROM crm.material_alerts WHERE id=$1',[created.id]),'PT403');
+    await role('service_role');
+    await core('workorder_save',{id:order.id,status:'ACTIVE'});
+    const another=(await alertMutate('material_alert_create',{workOrderId:order.id,itemName:'Manager reviewed',assigneeId:ids.accountant},ids.sales)).data.alerts[0];
+    const manager=request('material_alert_resolve',{id:another.id},(await alertRead(ids.manager)).revision,ids.manager); await alertCommit(manager);
+    await role('postgres'); await db.query("UPDATE crm.members SET role='SALES' WHERE user_id=$1",[ids.manager]); await role('service_role');
+    await rejects(()=>alertCommit(manager),'PT403');
+    const third=(await alertMutate('material_alert_create',{workOrderId:order.id,itemName:'Owner reviewed',assigneeId:ids.sales},ids.accountant)).data.alerts[0];
+    await alertMutate('material_alert_resolve',{id:third.id});
+    assert.equal((await alertRead(ids.sales,null,'RESOLVED')).total,3);
+    const activity=await query<{entries:{description:string}[]}>('SELECT public.crm_team_activity_read($1::uuid,$2,null,$3,1) AS result',[ids.owner,month,'workorders']);
+    assert.ok(activity.entries.some(row=>row.description.includes('Reported missing')&&row.description.includes(order.number)));
+    assert.ok(activity.entries.some(row=>row.description.includes('Resolved missing-stock')));
+  });
+
+  test('alert lists paginate and search all records literally while permissions exclude legacy Viewers and future Dealers',async()=>{
+    const order=await activeJob();
+    await role('postgres');
+    await db.query(`INSERT INTO crm.material_alerts(work_order_id,item_name,assignee_id,assignee_name,reported_by,reported_by_name,note,created_at)
+      SELECT $1,CASE WHEN n=1 THEN 'Hidden_100% material' ELSE 'Missing item '||n END,$2,'operations',$3,'sales','Need at site',clock_timestamp()+n*interval '1 microsecond' FROM generate_series(1,52)n`,[order.id,ids.operations,ids.sales]);
+    await role('service_role');
+    const page1=await alertRead(ids.sales,null,'OPEN',1); const page2=await alertRead(ids.sales,null,'OPEN',2);
+    assert.equal(page1.total,52); assert.equal(page1.alerts.length,50); assert.equal(page2.alerts.length,2);
+    assert.equal(new Set([...page1.alerts,...page2.alerts].map(row=>row.id)).size,52);
+    assert.equal((await alertRead(ids.accountant,null,'OPEN',1,'100%')).total,1);
+    assert.equal((await alertRead(ids.accountant,null,'OPEN',1,'_')).total,1);
+    assert.equal((await alertRead(ids.accountant,null,'OPEN',1,order.number.toLowerCase())).total,52);
+    assert.equal((await alertRead(ids.sales,order.id,'OPEN',1,'operations')).total,52);
+    await alertMutate('material_alert_resolve',{id:page2.alerts[0].id},ids.operations);
+    const all=await alertRead(ids.sales,null,'ALL'); assert.deepEqual([all.total,all.openCount,all.resolvedCount],[52,51,1]);
+    for(const actor of [ids.viewer,ids.pending,ids.removed,ids.anonymous,ids.banned,ids.outsider]) await rejects(()=>alertRead(actor),'PT403');
+    await rejects(()=>alertCommit(request('material_alert_create',{workOrderId:order.id,itemName:'No access',assigneeId:ids.operations},all.revision,ids.viewer)),'PT403');
+    // Model the next role migration without changing any existing-role permission.
+    await role('postgres'); await db.exec("ALTER TABLE crm.members DROP CONSTRAINT members_role_check; ALTER TABLE crm.members ADD CONSTRAINT members_role_check CHECK(role IN ('OWNER','MANAGER','SALES','OPERATIONS','ACCOUNTANT','VIEWER','DEALER'))");
+    await db.query("UPDATE crm.members SET role='DEALER' WHERE user_id=$1",[ids.viewer]); await role('service_role');
+    await rejects(()=>alertRead(ids.viewer),'PT403');
+    assert.ok((await alertRead()).assignees.every(row=>row.userId!==ids.viewer));
+    assert.deepEqual((await exported(ids.viewer)).extension.materialAlerts,[]);
+    for(const [status,page,search] of [['BAD',1,''],['OPEN',0,''],['OPEN',1,'x'.repeat(201)]] as const) await rejects(()=>alertRead(ids.owner,null,status,page,search),'PT400');
+  });
+
+  test('alert receipts are payload-bound and stale or failed response filters leave no partial report',async()=>{
+    const order=await activeJob(); const payload={workOrderId:order.id,itemName:'Atomic alert',assigneeId:ids.operations};
+    const req=request('material_alert_create',payload,(await alertRead()).revision,ids.sales); await alertCommit(req);
+    await rejects(()=>alertCommit({...req,actor:ids.accountant}),'PT409');
+    await rejects(()=>alertCommit({...req,payload:{...payload,note:'Changed'}}),'PT409');
+    const before=await state(); await rejects(()=>alertCommit(request('material_alert_create',payload,req.revision,ids.accountant)),'PT409');
+    const fresh=request('material_alert_create',payload,(await alertRead()).revision,ids.accountant);
+    await rejects(()=>alertCommit(fresh,null,'INVALID'),'PT400'); assert.deepEqual(await state(),before);
+    await rejects(()=>alertCommit({...fresh,action:'stock_move'}),'PT400'); assert.deepEqual(await state(),before);
+    for(const publicRole of ['anon','authenticated'] as const){
+      await role(publicRole); await db.exec(`select set_config('request.jwt.claims','{"role":"service_role"}',true)`);
+      await rejects(()=>alertRead(),'42501'); await rejects(()=>alertCommit(fresh),'42501');
+    }
+    await role('service_role'); await rejects(()=>db.query('SELECT * FROM crm.material_alerts'),'42501');
+    await rejects(()=>db.query('SELECT crm.material_alert_json(null::crm.material_alerts)'),'42501');
   });
 
   test('job material confirmation deducts the exact item and location once and exposes only the selected job history',async()=>{

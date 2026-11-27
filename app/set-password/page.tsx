@@ -3,7 +3,7 @@ import Link from 'next/link';
 import AuthShell, { SetupPending } from '@/components/AuthShell';
 import { PasswordForm, SignOutButton } from '@/components/AuthForms';
 import { isWorkspaceConfigured } from '@/lib/supabase/config';
-import { getWorkspace, CRMError } from '@/lib/server';
+import { getAccountMember, CRMError } from '@/lib/server';
 import { createAuthClient } from '@/lib/supabase/server';
 import { requirePasswordSetup } from '@/lib/password-setup';
 
@@ -12,9 +12,9 @@ export default async function SetPasswordPage() {
   if (!isWorkspaceConfigured()) return <SetupPending />;
   let email = '';
   try {
-    const workspace = await getWorkspace();
-    email = workspace.user.email;
-    await requirePasswordSetup(await createAuthClient(), workspace.user.userId);
+    const member = await getAccountMember();
+    email = member.email;
+    await requirePasswordSetup(await createAuthClient(), member.userId);
   }
   catch (error) {
     if (error instanceof CRMError && error.status === 401) redirect('/login');

@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { computeQuote, validateRegistration, parseMoney, todayIST, financialYear, STATE_OPTIONS } from './finance.ts';
 import { createDemoData } from './demo.ts';
+import { DOCUMENT_KEYS, DOCUMENT_NAMES, type WorkDocumentKey } from './work-documents.ts';
 import { WORK_LABELS, WORK_TRANSITIONS } from './work-order-status.ts';
 import { REQUIRED_QUOTE_CATEGORIES, MAX_QUOTE_ITEMS, QUOTE_ITEM_SCHEMA_VERSION, validateRequiredQuoteItems } from './quotation-categories.ts';
 import type { WorkspaceData, Role, Lead, LeadStatus, Quotation, WorkOrder, WorkStatus, QuoteItemInput, Company } from './types';
@@ -30,7 +31,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD.').refine(v
   const d = new Date(`${v}T00:00:00Z`); return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
 }, 'Enter a valid calendar date.');
 const optionalDate = z.union([date, z.literal('')]).default('');
-const role = z.enum(['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'VIEWER']);
+const role = z.enum(['OWNER', 'MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER']);
 const leadStatus = z.enum(['NEW', 'CONTACTED', 'SITE_VISIT', 'QUOTED', 'NEGOTIATION', 'WON', 'LOST']);
 const workStatus = z.enum(['PLANNED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED']);
 const owner = blank(200);
@@ -62,6 +63,7 @@ const schemas: Record<string, z.ZodType<any>> = {
   quote_reopen: identity,
   quote_revise: identity,
   quote_convert: identity,
+  workorder_paper_filing: z.object({ id, document: z.enum(DOCUMENT_KEYS), documentStatus: z.enum(['PENDING','RECEIVED']) }).strict(),
   workorder_save: z.union([
     z.object({ id, status: workStatus }).strict(),
     z.object({ id, owner, startDate: optionalDate, endDate: optionalDate, status: workStatus }).strict(),
@@ -84,7 +86,7 @@ const permission: Record<string, Role[]> = {
   followup_save: FOLLOW, followup_complete: FOLLOW, followup_cancel: FOLLOW,
   quote_save: SALES, quote_revise: SALES,
   quote_issue: APPROVE, quote_accept: APPROVE, quote_decline: APPROVE, quote_expire: APPROVE, quote_reopen: APPROVE, quote_convert: APPROVE,
-  workorder_save: DELIVERY, milestone_add: DELIVERY, milestone_complete: DELIVERY,
+  workorder_paper_filing: DELIVERY, workorder_save: DELIVERY, milestone_add: DELIVERY, milestone_complete: DELIVERY,
   company_save: ['OWNER'], member_role: ['OWNER'], member_active: ['OWNER'], load_demo: ['OWNER'], clear_demo: ['OWNER'],
 };
 function get<T extends { id: string }>(list: T[], value: string, label: string): T {
@@ -354,6 +356,16 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       const lead = get(data.leads, quote.leadId, 'Lead');
       const record = ensureWonWorkOrder(data, lead, action, now, quote);
       return `Work order ${record.number} ready.`;
+    }
+    case 'workorder_paper_filing': {
+      const order = get(data.workorders, p.id, 'Work order');
+      assert(!order.isDemo && order.status !== 'CANCELLED', 'Choose a real work order that has not been cancelled.');
+      const key = p.document as WorkDocumentKey;
+      assert((order.paperDocuments?.[key] ?? 'PENDING') !== p.documentStatus, 'This document already has that status.');
+      order.paperDocuments = { ...order.paperDocuments, [key]: p.documentStatus };
+      order.updatedAt = stamp;
+      audit(data, action, 'workorder', order.id, `${order.number}: ${DOCUMENT_NAMES[key]} marked ${p.documentStatus.toLowerCase()}`, stamp);
+      return 'Document status saved.';
     }
     case 'workorder_save': {
       const order = get(data.workorders, p.id, 'Work order');
