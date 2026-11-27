@@ -99,7 +99,7 @@ test('team settings offers Dealer instead of Viewer and describes the limited po
 test('assigned sites remain visible without submissions and show only explicit assigned project progress', () => {
   reset(); const html = renderToStaticMarkup(portal({ initialData: data({ leads: [], assignedSites: [assigned] }) }));
   for (const text of ['Assigned sites', 'Assigned installation', 'Assigned roof', 'Team site', 'WO/1', 'In progress', '0 kW', '1 of 3 milestones completed', 'Your first lead starts here']) assert.ok(html.includes(text), text);
-  assert.doesNotMatch(html, /not-own-lead|Delete enquiry|Genuine contact|Payments|Quotation total/);
+  assert.doesNotMatch(html, /not-own-lead|Delete lead|Genuine contact|Payments|Quotation total/);
   reset(); assert.match(renderToStaticMarkup(portal()), /No sites are assigned to you yet/);
 });
 
@@ -109,15 +109,15 @@ test('deletion names the eligible enquiry, requires confirmation and replays onl
   const initialData = data({ leads: [ownNew], assignedSites: [assigned] });
   remove = async request => { calls.push(request); if (calls.length === 1) throw new DealerLeadRequestError('Response lost', 0, true); return { data: data({ revision: 8, leads: [], assignedSites: [assigned] }), message: 'Lead deleted.' }; };
   let tree = portal({ initialData });
-  button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
+  button(tree, 'Delete lead').props.onClick(); tree = portal({ initialData });
   assert.equal(calls.length, 0);
   assert.match(renderToStaticMarkup(tree), /Delete “Own solar enquiry”\?/);
   assert.match(renderToStaticMarkup(tree), /cannot be undone/);
   button(tree, 'Keep enquiry').props.onClick(); tree = portal({ initialData });
   assert.equal(elements(tree).find(item => item.props.role === 'alertdialog'), undefined);
-  button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
+  button(tree, 'Delete lead').props.onClick(); tree = portal({ initialData });
   const confirmation = elements(tree).find(item => item.props.role === 'alertdialog');
-  button(confirmation, 'Delete enquiry').props.onClick(); button(confirmation, 'Delete enquiry').props.onClick();
+  button(confirmation, 'Delete lead').props.onClick(); button(confirmation, 'Delete lead').props.onClick();
   await new Promise(done => setImmediate(done)); tree = portal({ initialData });
   assert.equal(calls.length, 1); assert.equal(calls[0].leadId, 'own-lead'); assert.equal(calls[0].expectedRevision, 7);
   assert.match(renderToStaticMarkup(tree), /Deletion not yet confirmed/);
@@ -126,20 +126,46 @@ test('deletion names the eligible enquiry, requires confirmation and replays onl
   assert.match(renderToStaticMarkup(tree), /“Own solar enquiry” was deleted/);
   assert.match(renderToStaticMarkup(tree), /Assigned installation/);
   assert.equal(elements(tree).find(item => item.props.role === 'alertdialog'), undefined);
-  assert.equal(button(tree, 'Delete enquiry'), undefined);
+  assert.equal(button(tree, 'Delete lead'), undefined);
 });
 
-test('protected enquiries have an explanation without a delete action; denied deletion refreshes eligibility without revoking active access', async () => {
-  reset(); let tree = portal(); assert.equal(button(tree, 'Delete enquiry'), undefined);
+test('protected enquiries show an unavailable Delete lead button and reason; denied deletion refreshes eligibility without revoking active access', async () => {
+  reset(); let tree = portal(); assert.equal(button(tree, 'Delete lead').props.disabled, true); assert.equal(button(tree, 'Delete lead').props.onClick, undefined);
   assert.match(renderToStaticMarkup(tree), /Only new enquiries can be deleted/);
   reset(); const initialData = data({ leads: [{ ...lead, status: 'NEW', canDelete: true, deleteBlockedReason: null }] });
   remove = async () => { throw new DealerLeadRequestError('This enquiry is now assigned.', 403, false, false); };
   load = async () => data({ revision: 8, leads: [{ ...lead, status: 'NEW', deleteBlockedReason: 'Assigned enquiries are protected.' }], assignedSites: [assigned] });
-  tree = portal({ initialData }); button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
-  button(elements(tree).find(item => item.props.role === 'alertdialog'), 'Delete enquiry').props.onClick();
+  tree = portal({ initialData }); button(tree, 'Delete lead').props.onClick(); tree = portal({ initialData });
+  button(elements(tree).find(item => item.props.role === 'alertdialog'), 'Delete lead').props.onClick();
   await new Promise(done => setImmediate(done)); tree = portal({ initialData });
   assert.match(renderToStaticMarkup(tree), /Assigned enquiries are protected/); assert.match(renderToStaticMarkup(tree), /Assigned installation/);
-  assert.doesNotMatch(renderToStaticMarkup(tree), /Dealer access has changed|Retry deletion/); assert.equal(button(tree, 'Delete enquiry'), undefined);
+  assert.doesNotMatch(renderToStaticMarkup(tree), /Dealer access has changed|Retry deletion/); assert.equal(button(tree, 'Delete lead').props.disabled, true); assert.equal(button(tree, 'Delete lead').props.onClick, undefined);
+});
+
+test('every submitted lead has a findable Delete lead label while protected cards never offer an action', () => {
+  reset(); const leads = [
+    { ...lead, id: 'eligible', status: 'NEW', canDelete: true, deleteBlockedReason: null },
+    { ...lead, id: 'assigned', status: 'NEW', canDelete: false, deleteBlockedReason: 'Assigned enquiries are protected.' },
+    { ...lead, id: 'historical', status: 'WON', canDelete: false, deleteBlockedReason: null },
+    { ...lead, id: 'inconsistent', status: 'SITE_VISIT', canDelete: true, deleteBlockedReason: null },
+  ];
+  const tree = portal({ initialData: data({ leads }) });
+  const buttons = elements(tree).filter(item => item.type === 'button' && item.props['aria-label']?.startsWith('Delete lead:'));
+  assert.equal(buttons.length, 4); assert.equal(buttons[0].props.disabled, false); assert.equal(typeof buttons[0].props.onClick, 'function');
+  for (const item of buttons.slice(1)) { assert.equal(item.props.disabled, true); assert.equal(item.props.onClick, undefined); assert.ok(item.props['aria-describedby']); }
+  const html = renderToStaticMarkup(tree); assert.match(html, /Unavailable: Assigned enquiries are protected/); assert.match(html, /Unavailable: Only your untouched new enquiries can be deleted/);
+});
+
+test('long assigned-site lists provide a direct submissions shortcut and assigned-only accounts explain Admin review without destructive controls', () => {
+  reset(); const assignedSites = Array.from({ length: 20 }, (_, index) => ({ ...assigned, id: `assigned-${index}`, title: `Assigned project ${index}` }));
+  const tree = portal({ initialData: data({ assignedSites }) });
+  const jump = elements(tree).find(item => item.type === 'a' && item.props.href === '#dealer-submitted-leads');
+  assert.ok(jump); assert.match(renderToStaticMarkup(jump), /Your submitted leads \(1\)/);
+  assert.ok(elements(tree).some(item => item.props.id === 'dealer-submitted-leads'));
+  const html = renderToStaticMarkup(tree); assert.ok(html.indexOf('Your submitted leads') < html.indexOf('Assigned project 0'));
+  reset(); const assignedOnly = portal({ initialData: data({ leads: [], assignedSites }) });
+  const assignedOnlyHtml = renderToStaticMarkup(assignedOnly); assert.match(assignedOnlyHtml, /You have no submitted leads to delete/); assert.match(assignedOnlyHtml, /For a lead you did not submit, contact Admin to review its removal/);
+  assert.equal(button(assignedOnly, 'Delete lead'), undefined); assert.equal(elements(assignedOnly).find(item => item.type === 'a' && item.props.href === '#dealer-submitted-leads'), undefined);
 });
 
 test('regaining focus refreshes assignments and role, coalesces duplicate resume events and clears scoped data after revocation', async () => {
@@ -161,10 +187,10 @@ test('a stale read cannot restore a deleted enquiry and a focus event during del
   load = () => new Promise(resolve => { finishRead = resolve; });
   remove = () => new Promise(resolve => { finishDelete = resolve; });
   let tree = portal({ initialData }); const cleanup = effects.at(-1)();
-  button(tree, 'Delete enquiry').props.onClick(); tree = portal({ initialData });
+  button(tree, 'Delete lead').props.onClick(); tree = portal({ initialData });
   const confirmation = elements(tree).find(item => item.props.role === 'alertdialog');
   listeners.get('focus')();
-  button(confirmation, 'Delete enquiry').props.onClick();
+  button(confirmation, 'Delete lead').props.onClick();
   finishRead(data({ assignedSites: [assigned] })); await new Promise(done => setImmediate(done));
   listeners.get('focus')();
   load = async () => { throw new DealerLeadRequestError('Access removed', 403); };

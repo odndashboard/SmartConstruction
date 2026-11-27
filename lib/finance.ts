@@ -1,4 +1,4 @@
-import type { QuoteItemInput, QuoteItem, QuoteTotals, TaxMode } from './types';
+import type { QuoteItemInput, QuoteItem, QuoteTotals, TaxMode, PackagePricing } from './types';
 import { MAX_QUOTE_ITEMS } from './quotation-categories.ts';
 
 export const STATE_OPTIONS = [
@@ -66,7 +66,16 @@ export function getTaxMode(supplierState:string, placeOfSupply:string): TaxMode 
   if (supplierState !== placeOfSupply) return 'IGST';
   return UTGST.has(supplierState)?'CGST_UTGST':'CGST_SGST';
 }
-export function computeQuote(inputs: QuoteItemInput[], supplierState: string, placeOfSupply: string, gstEnabled = true): {items:QuoteItem[];totals:QuoteTotals} {
+function taxes(taxable: bigint, rate: bigint, mode: TaxMode) {
+  const split = mode === 'CGST_SGST' || mode === 'CGST_UTGST';
+  const cgst = split ? roundHalfUp(taxable * rate, 20000n) : 0n;
+  const sgst = mode === 'CGST_SGST' ? cgst : 0n;
+  const utgst = mode === 'CGST_UTGST' ? cgst : 0n;
+  const igst = mode === 'IGST' ? roundHalfUp(taxable * rate, 10000n) : 0n;
+  return { cgst, sgst, utgst, igst, total: taxable + cgst + sgst + utgst + igst };
+}
+
+export function computeQuote(inputs: QuoteItemInput[], supplierState: string, placeOfSupply: string, gstEnabled = true, pricing?: PackagePricing): {items:QuoteItem[];totals:QuoteTotals} {
   if (!Array.isArray(inputs) || inputs.length>MAX_QUOTE_ITEMS) throw new Error(`A quotation supports up to ${MAX_QUOTE_ITEMS} work items.`);
   const configuredMode = getTaxMode(supplierState,placeOfSupply);
   const mode: TaxMode = gstEnabled ? configuredMode : 'NO_GST';
@@ -77,6 +86,7 @@ export function computeQuote(inputs: QuoteItemInput[], supplierState: string, pl
     const price=scaled(input.unitPrice,2,`${prefix} unit price`);
     const discount=scaled(input.discount === '' ? '0' : input.discount,2,`${prefix} discount`);
     const rate=scaled(!gstEnabled && input.gstRate === '' ? '0' : input.gstRate,2,`${prefix} GST rate`);
+    if (pricing && (price !== 0n || discount !== 0n || rate !== 0n)) throw new Error('Enter price and GST once for the package.');
     if (quantity<=0n || quantity>1_000_000_000_000n) throw new Error(`${prefix} quantity must be positive and within the supported limit.`);
     if (rate>10000n) throw new Error(`${prefix} GST rate must be between 0 and 100%.`);
     if (!gstEnabled && rate !== 0n) throw new Error(`${prefix} has a GST rate. Apply GST or set the rate to zero.`);
@@ -85,17 +95,19 @@ export function computeQuote(inputs: QuoteItemInput[], supplierState: string, pl
     bounded(gross,`${prefix} gross value`);
     if (discount>gross) throw new Error(`${prefix} discount cannot exceed its gross value.`);
     const taxable=gross-discount;
-    let cgst=0n,sgst=0n,utgst=0n,igst=0n;
-    if(mode==='IGST') igst=roundHalfUp(taxable*rate,10000n);
-    if(mode==='CGST_SGST'||mode==='CGST_UTGST') {
-      cgst=roundHalfUp(taxable*rate,20000n);
-      if(mode==='CGST_SGST') sgst=cgst; else utgst=cgst;
-    }
-    const total=taxable+cgst+sgst+utgst+igst;
+    const { cgst, sgst, utgst, igst, total } = taxes(taxable, rate, mode);
     sums.subtotal+=gross;sums.discount+=discount;sums.taxable+=taxable;
     sums.cgst+=cgst;sums.sgst+=sgst;sums.utgst+=utgst;sums.igst+=igst;sums.total+=total;
     return {...input,...(!gstEnabled ? {gstRate:'0'} : {}),gross:bounded(gross),taxable:bounded(taxable),cgst:bounded(cgst),sgst:bounded(sgst),utgst:bounded(utgst),igst:bounded(igst),total:bounded(total)};
   });
+  if (pricing) {
+    const price = scaled(pricing.packagePrice, 2, 'Package price');
+    const rate = scaled(pricing.packageGstRate, 2, 'Package GST rate');
+    bounded(price, 'Package price');
+    if (rate > 10000n) throw new Error('Package GST rate must be between 0 and 100%.');
+    if (!gstEnabled && rate !== 0n) throw new Error('Apply GST or set the package GST rate to zero.');
+    Object.assign(sums, { subtotal: price, taxable: price }, taxes(price, rate, mode));
+  }
   const amounts = Object.fromEntries(Object.entries(sums).map(([key,value])=>[key,bounded(value,'Quotation total')])) as Omit<QuoteTotals,'mode'|'needsConfig'>;
   return {items,totals:{...amounts,mode,needsConfig:mode==='UNCONFIGURED'}};
 }

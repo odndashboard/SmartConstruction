@@ -127,3 +127,33 @@ test('authorized lead detail edits preserve status when the input omits it', () 
     assert.equal(lead.status, 'NEGOTIATION'); assert.equal(lead.title, 'New project title');
   }
 });
+
+test('Contacted and Site visit change status and active assignee together, including same-stage Dealer assignment', () => {
+  for (const roleName of ['OWNER', 'MANAGER'] as Role[]) {
+    const { data, lead } = fixture(); role(data, roleName);
+    applyAction(data, 'lead_status', { id: lead.id, status: 'CONTACTED', owner: 'test-SALES' }, now);
+    assert.equal(lead.status, 'CONTACTED'); assert.equal(lead.owner, 'test-SALES');
+    applyAction(data, 'lead_status', { id: lead.id, status: 'SITE_VISIT', owner: 'test-OPERATIONS' }, now);
+    assert.equal(lead.status, 'SITE_VISIT'); assert.equal(lead.owner, 'test-OPERATIONS');
+    applyAction(data, 'lead_status', { id: lead.id, status: 'SITE_VISIT', owner: 'test-DEALER' }, now);
+    assert.equal(lead.owner, 'test-DEALER'); assert.match(data.activity[0].description, /assigned to DEALER/);
+    applyAction(data, 'lead_status', { id: lead.id, status: 'SITE_VISIT', owner: '' }, now);
+    assert.equal(lead.owner, '');
+  }
+});
+
+test('omitted assignee preserves historical owners and explicit invalid assignments fail without changing the lead', () => {
+  const { data, lead } = fixture(); lead.owner = 'historical-owner';
+  applyAction(data, 'lead_status', { id: lead.id, status: 'CONTACTED' }, now); assert.equal(lead.owner, 'historical-owner');
+  data.members.find(member => member.role === 'SALES')!.active = false;
+  for (const owner of ['test-SALES', 'unknown-person', null, 12]) {
+    const before = structuredClone(lead);
+    assert.throws(() => applyAction(data, 'lead_status', { id: lead.id, status: 'SITE_VISIT', owner }, now), CRMError);
+    assert.deepEqual(lead, before);
+  }
+  for (const status of ['NEW', 'QUOTED', 'NEGOTIATION', 'WON', 'LOST']) {
+    const before = structuredClone(lead);
+    assert.throws(() => applyAction(data, 'lead_status', { id: lead.id, status, owner: 'test-OPERATIONS', lostReason: 'Actual reason' }, now), CRMError);
+    assert.deepEqual(lead, before);
+  }
+});

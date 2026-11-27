@@ -51,7 +51,7 @@ Missing configuration produces a setup-pending screen. It does not enable demo a
 
 **Core CRM records and stock are shared with active internal staff. Dealers use a separate lead portal.** Sales/work-order assignments show responsibility; they do not hide other employees' customers, quotations or work. Attendance, expenses and receipts are private to the employee and Owner. Company expense totals, customer payment tracking, procurement orders and Team activity are Owner-only; Managers and Accountants remain employees for these privacy rules. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the complete access table and setup steps.
 
-Add Lead links a customer using the lead contact or project title and phone. Billing details can be edited from the lead. Sales can add New enquiries and edit their details. Owners and Managers can mark a lead **Won** from the lead form or **Change status**. Lost requires a reason and reopens as New enquiry. Won is final.
+Add Lead links a customer using the lead contact or project title and phone. Billing details can be edited from the lead. Sales can add New enquiries and edit their details. In **Change status**, Owners and Managers can assign a person when choosing **Contacted** or **Site visit**, or mark the lead **Won**. Lost requires a reason and reopens as New enquiry. Won is final.
 
 Marking a lead **Won** creates a **Planned** work order using the lead's project details. Accepting a quotation marks its linked lead Won and creates a work order for its approved scope. If the lead already has a work order awaiting approval, the first accepted quotation attaches to that order and keeps its number, owner, dates and milestones. Each additional accepted quotation receives its own work order.
 
@@ -65,7 +65,8 @@ There is no public self-registration screen and no first-visitor-is-owner rule. 
 
 - Company currency is INR and business dates use `Asia/Kolkata`.
 - Money is calculated using integer paise and exact intermediate arithmetic.
-- New quotations default to **No GST**. Choose **Apply GST** to use the company's registration, place of supply and reviewed line-item rates. Enter a description, unit, quantity and price for Panels, Inverter, Structure, DC Wire, Ac Wire, Earthing Wire, Earthing ROD, Lighting Arrester and Filing. Use ₹0 for an item included in a package price. Extra work items are optional.
+- New quotations have one **Package price**. Enter the description, unit, quantity and any warranty for Panels, Inverter, Structure, DC Wire, Ac Wire, Earthing Wire, Earthing ROD, Lighting Arrester and Filing. Extra work items are optional. **No GST** is the default. With **Apply GST**, enter one rate for the package.
+- In a new or editable draft, choose a **Saved quotation** to reuse its work items, warranties and pricing for the current client. Review the package amount and GST before saving. In an existing itemized draft, **Use one package price** keeps its work items and lets you review the package amount before saving. Issued quotations keep their recorded amounts and warranties.
 - Issuing freezes supplier/customer details and quote amounts. Editing issued commercial terms requires a new revision.
 - Owners and Managers can use **Quotations → Change status** to issue a draft as **Awaiting approval**, record customer acceptance, or mark an issued quotation **Expired**. A quotation expired early can return to **Awaiting approval** through its original valid-until date. After that date, use **Create revision** to set a new validity period.
 - Marking a lead Won automatically creates its Planned work order, including when the lead has no quotation. The work order shows project details and expected kW; approved totals remain blank until a quotation is accepted.

@@ -6,7 +6,7 @@ import { DOCUMENT_KEYS, DOCUMENT_NAMES, type WorkDocumentKey } from './work-docu
 import { WORK_LABELS, WORK_TRANSITIONS } from './work-order-status.ts';
 import { REQUIRED_QUOTE_CATEGORIES, MAX_QUOTE_ITEMS, QUOTE_ITEM_SCHEMA_VERSION, validateRequiredQuoteItems } from './quotation-categories.ts';
 import { leadDeletionBlockReason } from './lead-deletion.ts';
-import type { WorkspaceData, Role, Lead, LeadStatus, Quotation, WorkOrder, WorkStatus, QuoteItemInput, Company } from './types';
+import type { WorkspaceData, Role, Lead, LeadStatus, Quotation, WorkOrder, WorkStatus, QuoteItemInput, Company, PackagePricing } from './types';
 
 export class CRMError extends Error {
   status: number;
@@ -38,7 +38,7 @@ const workStatus = z.enum(['PLANNED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELL
 const owner = blank(200);
 const identity = z.object({ id }).strict();
 const item = z.object({
-  category: z.enum(REQUIRED_QUOTE_CATEGORIES).optional(),
+  category: z.enum(REQUIRED_QUOTE_CATEGORIES).optional(), warranty: text(200).optional(),
   id, description: required(2000), hsnSac: text(8).optional(), quantity: required(30), unit: required(24),
   unitPrice: required(30), discount: text(30).optional(), gstRate: text(30).default(''),
 }).strict();
@@ -49,14 +49,14 @@ const schemas: Record<string, z.ZodType<any>> = {
   lead_save: z.object({ id: id.optional(), customerId: id.optional(), title: required(), contact: blank(), phone: blank(40), email: emailValue.optional(), expectedKw,
     location: blank(), siteAddress: blank(2000), stateCode: state, value: text(30).default('0'), status: leadStatus.optional(),
     source: blank(100), owner, priority: z.enum(['High', 'Medium', 'Low']).default('Medium'), notes: blank(10000) }).strict(),
-  lead_status: z.object({ id, status: leadStatus, lostReason: blank(3000) }).strict(),
+  lead_status: z.object({ id, status: leadStatus, lostReason: blank(3000), owner: text(200).optional() }).strict(),
   lead_delete: identity,
   followup_save: z.object({ id: id.optional(), leadId: id, quoteId: id.nullable().optional(), title: required(), dueAt: z.string().datetime({ offset: true }),
     channel: z.enum(['Call', 'WhatsApp', 'Email', 'Site visit', 'Other']), owner, notes: blank(5000) }).strict(),
   followup_complete: z.object({ id, outcome: required(5000) }).strict(),
   followup_cancel: identity,
   quote_save: z.object({ id: id.optional(), leadId: id, title: required(), validUntil: date, placeOfSupply: state, gstEnabled: z.boolean().optional(),
-    itemSchemaVersion: z.literal(QUOTE_ITEM_SCHEMA_VERSION).optional(),
+    itemSchemaVersion: z.literal(QUOTE_ITEM_SCHEMA_VERSION).optional(), packagePrice: required(30).optional(), packageGstRate: required(30).optional(),
     siteAddress: blank(2000), terms: blank(12000), items: z.array(item).max(MAX_QUOTE_ITEMS) }).strict(),
   quote_issue: identity,
   quote_accept: z.object({ id, acceptanceNote: required(5000) }).strict(),
@@ -120,8 +120,13 @@ function nextNumber(data: WorkspaceData, kind: 'Q' | 'WO', now: Date): string {
 function audit(data: WorkspaceData, action: string, type: string, entityId: string, description: string, now: string) {
   data.activity.unshift({ id: crypto.randomUUID(), actor: data.user.name, action, entityType: type, entityId, description, createdAt: now });
 }
-function calculate(items: QuoteItemInput[], supplierState: string, placeOfSupply: string, gstEnabled = true) {
-  try { return computeQuote(items, supplierState, placeOfSupply, gstEnabled); }
+function packagePricing(quote: Partial<PackagePricing>): PackagePricing | undefined {
+  if (quote.packagePrice === undefined && quote.packageGstRate === undefined) return undefined;
+  if (quote.packagePrice === undefined || quote.packageGstRate === undefined) throw new CRMError('Enter the package price and GST rate together.');
+  return { packagePrice: quote.packagePrice, packageGstRate: quote.packageGstRate };
+}
+function calculate(items: QuoteItemInput[], supplierState: string, placeOfSupply: string, gstEnabled = true, pricing?: PackagePricing) {
+  try { return computeQuote(items, supplierState, placeOfSupply, gstEnabled, pricing); }
   catch (error) { throw new CRMError(error instanceof Error ? error.message : 'Check quotation values.'); }
 }
 function validateQuoteCategories(items: QuoteItemInput[]) {
@@ -137,7 +142,7 @@ function inputMoney(value: string) {
   catch (error) { throw new CRMError(error instanceof Error ? error.message : 'Check amount.'); }
 }
 function quoteInputs(quote: Quotation): QuoteItemInput[] {
-  return quote.items.map(({ id, category, description, hsnSac, quantity, unit, unitPrice, discount, gstRate }) => ({ id, ...(category === undefined ? {} : { category }), description, hsnSac, quantity, unit, unitPrice, discount, gstRate }));
+  return quote.items.map(({ id, category, warranty, description, hsnSac, quantity, unit, unitPrice, discount, gstRate }) => ({ id, ...(warranty === undefined ? {} : { warranty }), ...(category === undefined ? {} : { category }), description, hsnSac, quantity, unit, unitPrice, discount, gstRate }));
 }
 
 /** A won enquiry can start delivery planning without implying a priced or
@@ -229,10 +234,17 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
     case 'lead_status': {
       const lead = get(data.leads, p.id, 'Lead');
       checkLeadTransition(lead, p.status, p.lostReason || lead.lostReason);
+      if (p.owner !== undefined) {
+        assert(['CONTACTED', 'SITE_VISIT'].includes(p.status), 'Assign a person here only for Contacted or Site visit.');
+        checkOwner(data, p.owner);
+      }
+      const reassigned = p.owner !== undefined && p.owner !== lead.owner;
+      if (p.owner !== undefined) lead.owner = p.owner;
       lead.status = p.status; lead.lostReason = p.status === 'LOST' ? p.lostReason || lead.lostReason : ''; lead.updatedAt = stamp;
       if (lead.status === 'WON') ensureWonWorkOrder(data, lead, action, now);
-      audit(data, action, 'lead', lead.id, `Lead moved to ${lead.status.toLowerCase().replaceAll('_', ' ')}`, stamp);
-      return 'Lead status updated.';
+      const assigned = lead.owner ? data.members.find(member => member.userId === lead.owner)?.name : 'Unassigned';
+      audit(data, action, 'lead', lead.id, `Lead moved to ${lead.status.toLowerCase().replaceAll('_', ' ')}${reassigned ? `; assigned to ${assigned}` : ''}`, stamp);
+      return reassigned ? 'Lead status and assignment updated.' : 'Lead status updated.';
     }
     case 'lead_delete': {
       const lead = get(data.leads, p.id, 'Lead');
@@ -274,15 +286,17 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       const existing = p.id ? get(data.quotations, p.id, 'Quotation') : undefined;
       if (existing) { assert(existing.status === 'DRAFT', 'Issued quotations are immutable. Create a revision.'); assert(existing.leadId === lead.id, 'A quotation cannot move to another lead.'); }
       assert(new Set(p.items.map((line: QuoteItemInput) => line.id)).size === p.items.length, 'Every work item must have a unique ID.');
+      const pricing = packagePricing(p);
+      assert(existing?.packagePrice === undefined || pricing, 'Reload the quotation to edit its package price and warranties.');
       validateQuoteCategories(p.items);
       // Older open clients submit explicit positive rates without the new flag.
       // Edits always retain the saved treatment unless the user changes it.
-      const gstEnabled = p.gstEnabled ?? (existing ? existing.gstEnabled !== false : p.items.some((line: QuoteItemInput) => Number(line.gstRate) > 0));
+      const gstEnabled = p.gstEnabled ?? (existing ? existing.gstEnabled !== false : pricing ? Number(pricing.packageGstRate) > 0 : p.items.some((line: QuoteItemInput) => Number(line.gstRate) > 0));
       const inputs: QuoteItemInput[] = p.items.map((line: QuoteItemInput) => {
         const saved = existing?.items.find(item => item.id === line.id);
-        return { ...line, hsnSac: line.hsnSac ?? saved?.hsnSac ?? '', discount: line.discount ?? saved?.discount ?? '0' };
+        return { ...line, ...(line.warranty === undefined && saved?.warranty !== undefined ? { warranty: saved.warranty } : {}), hsnSac: line.hsnSac ?? saved?.hsnSac ?? '', discount: line.discount ?? saved?.discount ?? '0' };
       });
-      const calculated = calculate(inputs, data.company.stateCode, p.placeOfSupply, gstEnabled);
+      const calculated = calculate(inputs, data.company.stateCode, p.placeOfSupply, gstEnabled, pricing);
       const record: Quotation = { ...p, ...calculated, itemSchemaVersion: QUOTE_ITEM_SCHEMA_VERSION, gstEnabled, id: existing?.id ?? crypto.randomUUID(), number: null, status: 'DRAFT',
         revision: existing?.revision ?? 1, ...(existing?.revisionOf ? { revisionOf: existing.revisionOf } : {}),
         acceptanceNote: '', isDemo: lead.isDemo, createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
@@ -305,7 +319,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       assert(!gstEnabled || quote.placeOfSupply, 'Add the project place of supply before issue.');
       assert(quote.validUntil >= today, 'The quotation validity date has passed. Update the draft.');
       assert(quote.items.length > 0, 'Add at least one work item.');
-      const calculated = calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply, gstEnabled);
+      const calculated = calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply, gstEnabled, packagePricing(quote));
       assert(!calculated.totals.needsConfig, 'Configure the supplier and project states before issue.');
       Object.assign(quote, calculated, { itemSchemaVersion: QUOTE_ITEM_SCHEMA_VERSION, supplier: clone(data.company), customer: clone(customer), number: nextNumber(data, 'Q', now),
         status: 'ISSUED', issuedAt: stamp, updatedAt: stamp });
@@ -353,11 +367,12 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       assert(!data.quotations.some(q => q.revisionOf === original.id), 'A newer revision already exists.');
       const inputs = quoteInputs(original).map(line => ({ ...line, id: crypto.randomUUID() }));
       const gstEnabled = original.gstEnabled !== false;
-      const calculated = calculate(inputs, data.company.stateCode, original.placeOfSupply, gstEnabled);
+      const pricing = packagePricing(original);
+      const calculated = calculate(inputs, data.company.stateCode, original.placeOfSupply, gstEnabled, pricing);
       const extended = todayIST(new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000));
       const revised: Quotation = { id: crypto.randomUUID(), leadId: original.leadId, number: null, title: original.title,
         validUntil: original.validUntil > extended ? original.validUntil : extended, placeOfSupply: original.placeOfSupply,
-        siteAddress: original.siteAddress, terms: original.terms, ...calculated, gstEnabled,
+        siteAddress: original.siteAddress, terms: original.terms, ...calculated, ...pricing, gstEnabled,
         ...(original.itemSchemaVersion ? { itemSchemaVersion: original.itemSchemaVersion } : {}), status: 'DRAFT', revision: original.revision + 1,
         revisionOf: original.id, acceptanceNote: '', isDemo: original.isDemo, createdAt: stamp, updatedAt: stamp };
       original.status = 'SUPERSEDED'; original.updatedAt = stamp; data.quotations.push(revised);
@@ -421,7 +436,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       validateGst(p.gstin, p.stateCode);
       data.company = { ...p, currency: 'INR', timeZone: 'Asia/Kolkata' } as Company;
       for (const quote of data.quotations.filter(q => q.status === 'DRAFT')) {
-        Object.assign(quote, calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply, quote.gstEnabled !== false), { updatedAt: stamp });
+        Object.assign(quote, calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply, quote.gstEnabled !== false, packagePricing(quote)), { updatedAt: stamp });
       }
       audit(data, action, 'company', '1', 'Updated company registration and contact settings', stamp);
       return 'Company settings saved. Issued documents remain unchanged.';

@@ -151,6 +151,11 @@
 .simple-mode-actions .button { min-height: 42px; color: #334e60; white-space: nowrap; }
 .simple-main { padding: 20px clamp(16px, 4vw, 44px) 48px; }
 .simple-back { margin-bottom: 16px; }
+.button.lead-delete-action { min-height: 44px; padding: 10px 14px; border: 1px solid #c48b85; border-radius: 7px; background: #fff7f6; color: #8b3029; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.button.lead-delete-action:hover:not(:disabled) { background: #fde9e7; border-color: #a6574f; }
+.lead-card > .lead-delete-action { width: 100%; justify-content: center; margin-top: 10px; }
+.table-container td > .lead-delete-action { display: flex; margin-top: 10px; }
+.lead-status-fields { display: grid; gap: 20px; }
 @media (max-width: 600px) {
   .topbar .mode-entry { min-height: 40px; padding-inline: 9px; font-size: 12px; }
   .simple-topbar { flex-wrap: wrap; gap: 8px; padding-block: 10px; }

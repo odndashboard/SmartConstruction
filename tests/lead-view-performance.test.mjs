@@ -9,7 +9,7 @@ import { LEAD_STAGES } from '../lib/types.ts';
 
 const source = readFileSync(new URL('../components/CRMApp.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('CRMApp.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ['ownerName', 'indexLeadCustomers', 'indexLeadOwners', 'useLeadViewLookup', 'groupLeadStages', 'LeadBoard', 'LeadTable'];
+const names = ['ownerName', 'indexLeadCustomers', 'indexLeadOwners', 'useLeadViewLookup', 'groupLeadStages', 'Dashboard', 'LeadBoard', 'LeadTable'];
 const declarations = names.map(name => {
   const node = ast.statements.find(item => ts.isFunctionDeclaration(item) && item.name?.text === name);
   assert.ok(node, `Missing ${name}`);
@@ -27,6 +27,9 @@ const helpers = {
   IconButton: ({ label, onClick }) => React.createElement('button', { 'aria-label': label, onClick }),
   Plus: blank, MoreHorizontal: blank, MapPin: blank, RefreshCw: blank,
   Trash2: blank, CalendarDays: blank, ArrowUpRight: blank,
+  DashboardOverview: blank, PanelHeader: ({ title, children }) => React.createElement('div', null, title, children),
+  FollowupRow: blank, QuoteTable: blank, WorkCard: blank, Empty: blank,
+  CalendarClock: blank, HardHat: blank, Building2: blank, effectiveQuoteStatus: quote => quote.status,
   formatINR: value => `INR ${value}`, stateLabel: code => code,
   leadLabel: status => status, displayDate: value => value,
 };
@@ -103,6 +106,42 @@ test('dashboard preview keeps two cards per stage and counts every matching lead
   assert.deepEqual(data.leads.map(row => row.id), ['a', 'b', 'c', 'd']);
 });
 
+test('actual initial dashboard pipeline offers a readable Delete lead action only to the active Owner', () => {
+  const data = { ...workspace(), company: { legalName: 'Company', address: 'Office' }, quotations: [], followups: [], workorders: [],
+    user: { role: 'OWNER', active: true, name: 'Admin' }, leads: [lead('roof')] };
+  const props = { data, permissions: { owner: true, commercial: true, manageLeadStatus: true }, navigate() {}, busy: false };
+  const markup = render('Dashboard', props);
+  assert.match(markup, /Lead pipeline/);
+  assert.match(markup, /aria-label="Delete Project roof"[^>]*>Delete lead<\/button>/);
+  assert.match(markup, /lead-delete-action/);
+  assert.doesNotMatch(render('Dashboard', { ...props, data: { ...data, user: { ...data.user, role: 'MANAGER' } } }), /Delete lead/);
+  assert.doesNotMatch(render('Dashboard', { ...props, data: { ...data, user: { ...data.user, active: false } } }), /Delete lead/);
+});
+
+test('dashboard and advanced cards and first table cell open the existing confirmation for the exact lead', () => {
+  const local = load({ useMemo: fn => fn() });
+  const nodes = element => React.isValidElement(element) ? [element, ...React.Children.toArray(element.props.children).flatMap(nodes)] : [];
+  const data = { ...workspace(), user: { role: 'OWNER', active: true }, leads: [lead('roof')] };
+  for (const [name, dashboard] of [['LeadBoard', true], ['LeadBoard', false], ['LeadTable', false]]) {
+    const opened = [];
+    const props = { data, leads: data.leads, dashboard, manageLeadStatus: false, commercial: false, open: target => opened.push(target) };
+    const tree = local[name](props);
+    const remove = nodes(tree).find(node => node.type === 'button' && node.props['aria-label'] === 'Delete Project roof');
+    assert.ok(remove); assert.equal(React.Children.toArray(remove.props.children).at(-1), 'Delete lead');
+    if (name === 'LeadTable') {
+      const firstCell = nodes(tree).find(node => node.type === 'td');
+      assert.ok(nodes(firstCell).some(node => node.props['aria-label'] === 'Delete Project roof'), 'Deletion is beside the project name, not beyond phone horizontal scrolling.');
+    }
+    assert.deepEqual(opened, []); remove.props.onClick();
+    assert.deepEqual(opened, [{ type: 'lead_delete', id: 'roof' }]);
+    const busy = nodes(local[name]({ ...props, busy: true })).find(node => node.type === 'button' && node.props['aria-label'] === 'Delete Project roof');
+    assert.equal(busy.props.disabled, true);
+    for (const role of ['MANAGER', 'SALES', 'OPERATIONS', 'ACCOUNTANT', 'DEALER']) {
+      assert.equal(nodes(local[name]({ ...props, data: { ...data, user: { role, active: true } } })).some(node => node.props['aria-label'] === 'Delete Project roof'), false);
+    }
+  }
+});
+
 test('memoized view data reuses unchanged arrays and refreshes edited customer, owner and stage data', () => {
   const slots = [];
   let cursor = 0;
@@ -172,6 +211,6 @@ test('advanced Leads offers Delete on both views only to an active owner', () =>
     for (const view of ['LeadBoard', 'LeadTable']) {
       assert.equal(render(view, { data, leads }).includes('Delete Project roof'), visible);
     }
-    assert.doesNotMatch(render('LeadBoard', { data, leads, dashboard: true }), /Delete Project roof/);
+    assert.equal(render('LeadBoard', { data, leads, dashboard: true }).includes('Delete Project roof'), visible);
   }
 });

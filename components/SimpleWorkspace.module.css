@@ -9,12 +9,14 @@
 .scheduleMissing{padding:13px 16px;margin:0 0 16px;border:1px solid #d4e0e7;border-radius:9px;background:#f5f8fa}.scheduleMissing summary{cursor:pointer;font-size:13px;font-weight:600;line-height:1.7;color:#395d73;padding:5px 0}.scheduleMissing>p{margin:10px 0 0}.scheduleRow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:3px 14px;padding:8px 0;border-top:1px solid #e2e9ee;margin-top:8px}.scheduleRow strong{font-size:13px;line-height:1.7;overflow-wrap:anywhere;min-width:0}.scheduleRow button{font-size:12px!important;min-height:44px}
 
 .deleteLead {
-  background: transparent;
-  border: 0;
-  color: #933b35;
+  background: #fff7f6;
+  border: 1px solid #c48b85;
+  border-radius: 7px;
+  color: #8b3029;
+  font-weight: 600;
   min-height: 44px;
-  padding: 0 0.55rem;
+  padding: 10px 14px;
   cursor: pointer;
 }
-.deleteLead:hover { text-decoration: underline; }
+.deleteLead:hover:not(:disabled) { background: #fde9e7; border-color: #a6574f; }
 .deleteLead:disabled { opacity: 0.6; cursor: default; }

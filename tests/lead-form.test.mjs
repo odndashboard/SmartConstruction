@@ -32,8 +32,12 @@ const helpers = {
 const compiled = ts.transpileModule(`${declarations}\nexport { ${names.join(',')} };`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
-const components = {};
-new Function('require', 'exports', ...Object.keys(helpers), compiled)(createRequire(import.meta.url), components, ...Object.values(helpers));
+function loadComponents(overrides = {}) {
+  const bindings = { ...helpers, ...overrides }, loaded = {};
+  new Function('require', 'exports', ...Object.keys(bindings), compiled)(createRequire(import.meta.url), loaded, ...Object.values(bindings));
+  return loaded;
+}
+const components = loadComponents();
 
 const member = { userId: 'sales-test', name: 'Sales colleague', active: true };
 const data = { user: member, members: [member], customers: [], leads: [], quotations: [], followups: [], workorders: [] };
@@ -142,7 +146,7 @@ test('lead forms preserve role restrictions, terminal Won and Lost reopening', a
 
 test('Change Status offers Won while preserving closed lead rules', () => {
   const render = lead => renderToStaticMarkup(React.createElement(components.LeadStatusForm, {
-    lead, busy: false, close() {}, mutate: async () => undefined, open() {},
+    lead, data, busy: false, close() {}, mutate: async () => undefined, open() {},
   }));
   assert.match(render(baseLead), /<option value="WON">Won<\/option>/);
   const lost = render({ ...baseLead, status: 'LOST', lostReason: 'Paused project' });
@@ -166,7 +170,7 @@ test('Simple mode creates a lead with only its name required, using the signed-i
 
 test('Simple mode names approval and rejection while preserving the stored lead stages', () => {
   const html = renderToStaticMarkup(React.createElement(components.LeadStatusForm, {
-    lead: baseLead, busy: false, close() {}, mutate: async () => undefined, open() {}, simple: true,
+    lead: baseLead, data, busy: false, close() {}, mutate: async () => undefined, open() {}, simple: true,
   }));
   assert.match(html, /value="WON">Approved \(Won\)/);
   assert.match(html, /value="LOST">Not approved \(Lost\)/);
@@ -202,4 +206,74 @@ test('lead history, examples and stale selections do not offer deletion', () => 
     assert.match(renderToStaticMarkup(dialog), reason);
     assert.deepEqual(fields(dialog).filter(item => item.type === 'button').map(item => item.props.children), ['Close']);
   }
+});
+
+function statusHarness(lead = baseLead, simple = false) {
+  const slots = []; let cursor = 0;
+  const local = loadComponents({ useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = initial;
+    return [slots[index], value => { slots[index] = value; }]; } });
+  const calls = [], opened = []; let closed = 0;
+  const workspace = { ...data, members: [member,
+    { userId: 'dealer-active', name: 'Active dealer', role: 'DEALER', active: true },
+    { userId: 'former-member', name: 'Former colleague', active: false }] };
+  const props = { lead, data: workspace, simple, busy: false, close: () => closed++, open: target => opened.push(target),
+    mutate: async (...args) => { calls.push(args); return workspace; } };
+  const draw = () => { cursor = 0; return local.LeadStatusForm(props); };
+  const field = name => fields(draw()).find(item => item.props.name === name);
+  const set = (name, value) => field(name).props.onChange({ target: { value } });
+  return { props, calls, opened, draw, field, set, get closed() { return closed; },
+    submit: () => draw().props.onSubmit({ preventDefault() {} }) };
+}
+
+test('Contacted and Site visit status dialogs offer current assignment and active staff/dealers in both modes', async () => {
+  for (const simple of [false, true]) {
+    const form = statusHarness(baseLead, simple);
+    assert.equal(form.field('owner'), undefined);
+    form.set('status', 'CONTACTED');
+    assert.equal(form.field('owner').props.value, member.userId);
+    const markup = renderToStaticMarkup(form.draw());
+    assert.match(markup, /Assigned to/); assert.match(markup, /Active dealer/); assert.match(markup, /Unassigned/);
+    assert.doesNotMatch(markup, /Former colleague/);
+    await form.submit();
+    assert.deepEqual(form.calls.pop(), ['lead_status', { id: baseLead.id, status: 'CONTACTED', lostReason: '' }, false]);
+    if (simple) assert.equal(form.closed, 1); else assert.deepEqual(form.opened, [{ type: 'lead_detail', id: baseLead.id }]);
+    form.set('status', 'SITE_VISIT'); form.set('owner', 'dealer-active'); await form.submit();
+    assert.deepEqual(form.calls.pop(), ['lead_status', { id: baseLead.id, status: 'SITE_VISIT', lostReason: '', owner: 'dealer-active' }, false]);
+  }
+});
+
+test('status assignment permits same-stage reassignment and explicit unassignment, and sends no owner for other stages', async () => {
+  const form = statusHarness({ ...baseLead, status: 'CONTACTED' });
+  await form.submit(); assert.deepEqual(form.calls, []);
+  form.set('owner', 'dealer-active'); await form.submit();
+  assert.deepEqual(form.calls.pop()[1], { id: baseLead.id, status: 'CONTACTED', lostReason: '', owner: 'dealer-active' });
+  form.set('owner', ''); await form.submit();
+  assert.equal(form.calls.pop()[1].owner, '');
+  form.set('owner', 'dealer-active'); form.set('status', 'NEGOTIATION');
+  assert.equal(form.field('owner'), undefined); await form.submit();
+  assert.deepEqual(form.calls.pop()[1], { id: baseLead.id, status: 'NEGOTIATION', lostReason: '' });
+  form.set('status', 'SITE_VISIT'); form.props.busy = true; await form.submit(); assert.deepEqual(form.calls, []);
+});
+
+test('status changes preserve historical assignees unless explicitly replaced', async () => {
+  for (const owner of ['former-member', 'missing-member']) {
+    const form = statusHarness({ ...baseLead, status: 'CONTACTED', owner });
+    const option = fields(form.draw()).find(item => item.type === 'option' && item.props.value === owner);
+    assert.equal(option.props.disabled, true); assert.equal(form.field('owner').props.value, owner);
+    assert.match(renderToStaticMarkup(form.draw()), /no longer active/);
+    form.set('status', 'SITE_VISIT'); await form.submit();
+    assert.equal('owner' in form.calls.pop()[1], false);
+    form.set('owner', 'dealer-active'); await form.submit();
+    assert.equal(form.calls.pop()[1].owner, 'dealer-active');
+    form.props.data.members = form.props.data.members.map(member => member.userId === 'dealer-active' ? { ...member, active: false } : member);
+    await form.submit(); assert.deepEqual(form.calls, []);
+  }
+});
+
+test('lead details provide a readable Delete lead action and retain confirmation routing', () => {
+  const opened = [];
+  const tree = components.LeadDetail({ lead: baseLead, data, permissions: { owner: true }, busy: false, open: target => opened.push(target) });
+  const button = fields(tree).find(item => item.type === 'button' && item.props['aria-label'] === `Delete ${baseLead.title}`);
+  assert.ok(button); assert.match(renderToStaticMarkup(button), /Delete lead/); assert.match(button.props.className, /lead-delete-action/);
+  assert.deepEqual(opened, []); button.props.onClick(); assert.deepEqual(opened, [{ type: 'lead_delete', id: baseLead.id }]);
 });

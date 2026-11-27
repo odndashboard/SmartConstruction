@@ -33,6 +33,7 @@ export interface FollowUp {
 }
 export interface QuoteItemInput {
   category?: QuoteItemCategory;
+  warranty?: string;
   id: string; description: string; hsnSac: string; quantity: string; unit: string;
   unitPrice: string; discount: string; gstRate: string;
 }
@@ -43,7 +44,11 @@ export interface QuoteTotals {
   subtotal: number; discount: number; taxable: number; cgst: number; sgst: number;
   utgst: number; igst: number; total: number; mode: TaxMode; needsConfig: boolean;
 }
-export interface Quotation {
+export interface PackagePricing {
+  packagePrice: string;
+  packageGstRate: string;
+}
+export interface Quotation extends Partial<PackagePricing> {
   /** Required-category layout; absent on immutable historical quotations. */
   itemSchemaVersion?: 2;
   /** Absent on historical quotations, whose original GST treatment is retained. */
