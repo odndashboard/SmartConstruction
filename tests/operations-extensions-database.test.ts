@@ -7,6 +7,7 @@ import { applyAction } from '../lib/server-actions.ts';
 import type { WorkspaceData } from '../lib/types.ts';
 import type { OperationsData } from '../lib/operations-types.ts';
 import type { ExpenseReceipt, OperationsExtension } from '../lib/operations-extensions.ts';
+import { completeQuoteItems } from './fixtures/quotation-items.ts';
 
 const ids = {
   owner: '20000000-0000-4000-8000-000000000001', manager: '20000000-0000-4000-8000-000000000002',
@@ -16,7 +17,7 @@ const ids = {
   anonymous: '20000000-0000-4000-8000-000000000009', banned: '20000000-0000-4000-8000-000000000010',
   accountant: '20000000-0000-4000-8000-000000000011',
 };
-const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql', '20261127072310_won_lead_workorders.sql', '20261127082025_quotation_approval_status.sql', '20261127101206_payments_optional_gst_reopen_work.sql'];
+const migrations = ['202611230001_crm.sql', '20261123173951_operations.sql', '20261123182424_operations_extensions.sql', '20261124072200_accountant_and_lead_status.sql', '20261127062903_lead_expected_kw.sql', '20261127065452_manual_lead_won.sql', '20261127072310_won_lead_workorders.sql', '20261127082025_quotation_approval_status.sql', '20261127101206_payments_optional_gst_reopen_work.sql', '20261127102202_required_quotation_items.sql', '20261127102917_work_order_job_materials.sql'];
 let db: PGlite;
 let today: string;
 let month: string;
@@ -52,6 +53,9 @@ async function rejects(run: () => Promise<unknown>, codes: string | string[]) {
 }
 async function read(actor = ids.owner, selectedMonth = month): Promise<OperationsData> {
   return query('SELECT public.crm_operations_v2_read($1::uuid,$2) AS result', [actor, selectedMonth]);
+}
+async function jobRead(workOrderId:string,actor=ids.owner,selectedMonth=month):Promise<OperationsData>{
+  return query('SELECT public.crm_job_materials_read($1::uuid,$2,$3) AS result',[actor,selectedMonth,workOrderId]);
 }
 function request(action: string, payload: unknown, revision: number, actor = ids.owner, requestId = crypto.randomUUID()) {
   return { action, payload, revision, actor, requestId, month, hash: createHash('sha256').update(JSON.stringify({ action, payload })).digest('hex') };
@@ -96,7 +100,8 @@ async function state() {
   await role('postgres');
   const result = await query(`SELECT jsonb_build_object('revision',(SELECT revision FROM crm.operations_state),'moves',(SELECT count(*) FROM crm.stock_movements),
     'transfers',(SELECT count(*) FROM crm.stock_transfers),'returns',(SELECT count(*) FROM crm.stock_returns),'orders',(SELECT count(*) FROM crm.purchase_orders),
-    'lines',(SELECT count(*) FROM crm.purchase_order_lines),'audit',(SELECT count(*) FROM crm.operations_audit),'receipts',(SELECT count(*) FROM crm.operations_receipts)) AS result`);
+    'lines',(SELECT count(*) FROM crm.purchase_order_lines),'audit',(SELECT count(*) FROM crm.operations_audit),'receipts',(SELECT count(*) FROM crm.operations_receipts),
+    'jobEntries',(SELECT count(*) FROM crm.job_material_entries)) AS result`);
   await role('service_role'); return result;
 }
 async function core(action: string, payload: unknown) {
@@ -119,9 +124,16 @@ async function workOrder() {
   await core('company_save', { name: 'Smart construction', legalName: 'Test contractor', address: 'Test supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: '' });
   const lead = (await core('lead_save', { customerId: customer.id, title: name, stateCode: '06', siteAddress: 'Test site', value: '10000' })).data.leads.find(row => row.title === name)!;
   const quote = (await core('quote_save', { leadId: lead.id, title: name, validUntil: day(30), placeOfSupply: '06', siteAddress: 'Test site', terms: '',
-    items: [{ id: crypto.randomUUID(), description: 'Test service', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }] })).data.quotations.find(row => row.title === name)!;
+    items: completeQuoteItems([{ id: crypto.randomUUID(), description: 'Test service', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }]) })).data.quotations.find(row => row.title === name)!;
   await core('quote_issue', { id: quote.id }); await core('quote_accept', { id: quote.id, acceptanceNote: 'Synthetic written acceptance' });
   return (await core('quote_convert', { id: quote.id })).data.workorders.find(row => row.quoteId === quote.id)!;
+}
+async function activeJob(){
+  const title=`Active job ${crypto.randomUUID()}`;
+  const created=(await core('lead_save',{title,status:'WON'})).data;
+  const lead=created.leads.find(row=>row.title===title)!;
+  const order=created.workorders.find(row=>row.leadId===lead.id)!;
+  return (await core('workorder_save',{id:order.id,status:'ACTIVE'})).data.workorders.find(row=>row.id===order.id)!;
 }
 
 describe('Operations extensions: real database rules and scoped workflows', { concurrency: false }, () => {
@@ -379,6 +391,120 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     assert.equal(expanded.number, 'SC/PO/1000000');
   });
 
+  test('job material confirmation deducts the exact item and location once and exposes only the selected job history',async()=>{
+    const order=await activeJob(); const other=await activeJob(); const material=await item('20');
+    const main=(await read()).extension.sites.find(row=>row.system)!; const source=await site('Job material source');
+    await mutate('stock_transfer',{itemId:material.id,fromSiteId:main.id,toSiteId:source.id,quantity:'8'});
+    const req=request('job_material_issue',{workOrderId:order.id,category:'DC Wire',itemId:material.id,siteId:source.id,quantity:'2.5'},(await read()).revision,ids.manager);
+    const result=await commit(req); const entry=result.data.extension.jobMaterialEntries![0];
+    assert.deepEqual([entry.workOrderId,entry.category,entry.itemId,entry.siteId,entry.quantityMilli,entry.returnedMilli,entry.actorId],
+      [order.id,'DC Wire',material.id,source.id,2500,'0',ids.manager]);
+    assert.ok(entry.movementId); assert.ok(entry.actorName); assert.ok(entry.createdAt);
+    const movement=result.data.stockMovements.find(row=>row.id===entry.movementId)!;
+    assert.equal(movement.type,'OUT'); assert.equal(movement.deltaMilli,-2500);
+    assert.ok(movement.reference.includes(order.number)&&movement.reference.includes('DC Wire'));
+    assert.equal(result.data.stockItems.find(row=>row.id===material.id)!.quantityMilli,17500);
+    assert.equal(result.data.extension.siteBalances.find(row=>row.itemId===material.id&&row.siteId===source.id)!.quantityMilli,5500);
+    assert.equal(result.data.extension.siteBalances.find(row=>row.itemId===material.id&&row.siteId===main.id)!.quantityMilli,12000);
+    const before=await state(); const replay=await commit(req); assert.deepEqual(await state(),before); assert.deepEqual(replay.data.extension.jobMaterialEntries,[entry]);
+    assert.deepEqual((await read()).extension.jobMaterialEntries,[],'Routine dashboard reads avoid lifetime job serialization');
+    assert.deepEqual((await jobRead(other.id)).extension.jobMaterialEntries,[]);
+    for(const actor of [ids.owner,ids.manager,ids.operations,ids.sales,ids.accountant,ids.viewer]) {
+      assert.deepEqual((await jobRead(order.id,actor,'2020-01')).extension.jobMaterialEntries,[entry]);
+      assert.deepEqual((await exported(actor)).extension.jobMaterialEntries,[entry]);
+    }
+    const returned=await mutate('stock_return',{movementId:entry.movementId,quantity:'0.5',siteId:main.id,reason:'Unused wire'},ids.accountant);
+    assert.equal(returned.data.stockItems.find(row=>row.id===material.id)!.quantityMilli,18000);
+    assert.ok(returned.data.stockMovements.some(row=>row.kind==='RETURN'&&row.reference.includes(order.number)&&row.reference.includes('DC Wire')));
+    const corrected=(await jobRead(order.id,ids.viewer)).extension.jobMaterialEntries![0];
+    assert.equal(corrected.returnedMilli,'500');
+    assert.equal((await commit(req)).data.extension.jobMaterialEntries![0].returnedMilli,'500','Retry returns current scoped history');
+    await rejects(()=>mutate('stock_return',{movementId:entry.movementId,quantity:'2.001',reason:'Too much'},ids.sales),'PT409');
+    await assertStock();
+  });
+
+  test('job writes preserve delivery roles, real active status and every existing stock validation',async()=>{
+    const order=await activeJob(); const material=await item('2'); const main=(await read()).extension.sites.find(row=>row.system)!;
+    const payload={workOrderId:order.id,category:'Panels',itemId:material.id,siteId:main.id,quantity:'1'};
+    for(const actor of [ids.sales,ids.accountant,ids.viewer]) {
+      await rejects(()=>mutate('job_material_issue',payload,actor),'PT403');
+      await rejects(()=>mutate('job_filing_complete',{workOrderId:order.id},actor),'PT403');
+    }
+    for(const actor of [ids.pending,ids.removed,ids.anonymous,ids.banned,ids.outsider]) {
+      await rejects(()=>jobRead(order.id,actor),'PT403');
+      await rejects(()=>commit(request('job_material_issue',payload,0,actor)),'PT403');
+    }
+    const before=await state();
+    for(const quantity of ['0','-1','1.0001','9000000000.001','NaN']) await rejects(()=>mutate('job_material_issue',{...payload,quantity}),'PT400');
+    await rejects(()=>mutate('job_material_issue',{...payload,quantity:'2.001'}),'PT409');
+    await rejects(()=>mutate('job_material_issue',{...payload,category:'Unknown'}),'PT400');
+    await rejects(()=>mutate('job_material_issue',{...payload,actorId:ids.owner}),'PT400');
+    await rejects(()=>mutate('job_material_issue',{...payload,itemId:crypto.randomUUID()}),['PT400','PT404']);
+    await rejects(()=>mutate('job_material_issue',{...payload,siteId:crypto.randomUUID()}),'PT400');
+    await rejects(()=>mutate('job_material_issue',{...payload,workOrderId:crypto.randomUUID()}),'PT404');
+    await rejects(()=>jobRead(crypto.randomUUID()),'PT404');
+    assert.deepEqual(await state(),before);
+    const archived=await site('Archived stock location'); await mutate('site_active',{id:archived.id,active:false});
+    await rejects(()=>mutate('job_material_issue',{...payload,siteId:archived.id}),'PT400');
+    const archivedMaterial=await item('0'); await mutate('stock_item_active',{id:archivedMaterial.id,active:false});
+    await rejects(()=>mutate('job_material_issue',{...payload,itemId:archivedMaterial.id}),['PT400','PT404']);
+    await core('load_demo',{});
+    const examples=(await query<WorkspaceData>('SELECT public.crm_workspace_read($1::uuid,true) AS result',[ids.owner])).workorders.filter(row=>row.isDemo);
+    await rejects(()=>mutate('job_material_issue',{...payload,workOrderId:examples[0].id}),'PT404');
+    const untouched=(await core('lead_save',{title:'Not started job',status:'WON'})).data.workorders.find(row=>row.status==='PLANNED'&&!row.isDemo)!;
+    await rejects(()=>mutate('job_material_issue',{...payload,workOrderId:untouched.id}),'PT409');
+    const prepared=request('job_material_issue',payload,(await read()).revision,ids.operations);
+    await core('workorder_save',{id:order.id,status:'ON_HOLD'});
+    await rejects(()=>commit(prepared),'PT409');
+    await rejects(()=>mutate('job_filing_complete',{workOrderId:order.id}),'PT409');
+    await core('workorder_save',{id:order.id,status:'ACTIVE'}); await core('workorder_save',{id:order.id,status:'COMPLETED'});
+    await rejects(()=>mutate('job_material_issue',payload),'PT409');
+    assert.deepEqual((await jobRead(order.id)).extension.jobMaterialEntries,[]);
+    await core('workorder_save',{id:order.id,status:'ACTIVE'});
+    assert.deepEqual((await jobRead(order.id)).extension.jobMaterialEntries,[],'Reopening itself never deducts stock');
+    await mutate('job_material_issue',{...payload,quantity:'0.001'},ids.operations);
+    await core('workorder_save',{id:order.id,status:'CANCELLED'});
+    await rejects(()=>mutate('job_material_issue',payload),'PT409');
+    assert.equal((await jobRead(order.id)).extension.jobMaterialEntries!.length,1);
+    await assertStock();
+  });
+
+  test('all job categories permit explicit partial material use while Filing completion is separate, immutable and retry-safe',async()=>{
+    const order=await activeJob(); const material=await item('10'); const main=(await read()).extension.sites.find(row=>row.system)!;
+    const categories=['Panels','Inverter','Structure','DC Wire','Ac Wire','Earthing Wire','Earthing ROD','Lighting Arrester','Filing'];
+    for(const [index,category] of categories.entries()) await mutate('job_material_issue',{workOrderId:order.id,category,itemId:material.id,siteId:main.id,quantity:'0.125'},[ids.owner,ids.manager,ids.operations][index%3]);
+    const materials=(await jobRead(order.id)).extension.jobMaterialEntries!;
+    assert.equal(materials.length,9); assert.ok(materials.every(row=>row.movementId));
+    assert.equal((await read()).stockItems.find(row=>row.id===material.id)!.quantityMilli,8875);
+    const filing=request('job_filing_complete',{workOrderId:order.id},(await read()).revision,ids.operations);
+    const finished=await commit(filing); const completion=finished.data.extension.jobMaterialEntries!.find(row=>!row.movementId)!;
+    assert.deepEqual([completion.category,completion.itemId,completion.siteId,completion.quantityMilli,completion.returnedMilli],['Filing',null,null,null,'0']);
+    assert.equal(finished.data.stockItems.find(row=>row.id===material.id)!.quantityMilli,8875);
+    const before=await state(); await commit(filing); assert.deepEqual(await state(),before);
+    await rejects(()=>mutate('job_filing_complete',{workOrderId:order.id},ids.manager),'PT409');
+    await rejects(()=>mutate('job_filing_complete',{workOrderId:order.id,quantity:'1'}),'PT400');
+    await role('postgres');
+    await rejects(()=>db.query('UPDATE crm.job_material_entries SET category=$2 WHERE id=$1',[materials[0].id,'Filing']),'PT403');
+    await rejects(()=>db.query('DELETE FROM crm.job_material_entries WHERE id=$1',[completion.id]),'PT403');
+    await db.query("UPDATE crm.members SET role='SALES' WHERE user_id=$1",[ids.operations]); await role('service_role');
+    await rejects(()=>commit(filing),'PT403');
+    const history=await query<{entries:{module:string;description:string}[]}>('SELECT public.crm_team_activity_read($1::uuid,$2,null,$3,1) AS result',[ids.owner,month,'workorders']);
+    assert.ok(history.entries.some(row=>row.description.includes('Completed Filing')&&row.description.includes(order.number)));
+    await assertStock();
+  });
+
+  test('job history RPC and immutable linkage table retain the service-only boundary',async()=>{
+    const order=await activeJob();
+    for(const publicRole of ['anon','authenticated'] as const){
+      await role(publicRole); await db.exec(`select set_config('request.jwt.claims','{"role":"service_role"}',true)`);
+      await rejects(()=>jobRead(order.id),'42501'); await rejects(()=>db.query('select * from crm.job_material_entries'),'42501');
+    }
+    await role('service_role');
+    await rejects(()=>db.query('select * from crm.job_material_entries'),'42501');
+    await rejects(()=>db.query('select crm.job_material_entry_json(null::crm.job_material_entries)'),'42501');
+    assert.deepEqual((await jobRead(order.id)).extension.jobMaterialEntries,[]);
+  });
+
   test('unpriced Won work records exact advances and preserves receipts when a smaller real quote is accepted', async () => {
     const created = await core('lead_save', { title: 'Unpriced planned project', status: 'WON', expectedKw: '6.75', stateCode: '06' });
     const lead = created.data.leads[0]; const planned = created.data.workorders[0];
@@ -397,7 +523,7 @@ describe('Operations extensions: real database rules and scoped workflows', { co
     await core('customer_save', { id: customer.id, name: customer.name, address: 'Confirmed billing address', stateCode: '06' });
     await core('company_save', { name: 'Smart construction', legalName: 'Test contractor', address: 'Supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: '' });
     const quote = (await core('quote_save', { leadId: lead.id, title: 'Genuine agreed scope', validUntil: day(30), placeOfSupply: '06', siteAddress: 'Confirmed site', terms: '',
-      items: [{ id: crypto.randomUUID(), description: 'Actual agreed scope', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }] })).data.quotations[0];
+      items: completeQuoteItems([{ id: crypto.randomUUID(), description: 'Actual agreed scope', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }]) })).data.quotations[0];
     await core('quote_issue', { id: quote.id });
     const accepted = await core('quote_accept', { id: quote.id, acceptanceNote: 'Actual acceptance' });
     assert.equal(accepted.data.workorders.length, 1); assert.equal(accepted.data.workorders[0].id, planned.id);

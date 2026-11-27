@@ -1,3 +1,4 @@
+import { completeQuoteItems } from './fixtures/quotation-items.ts';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { applyAction, CRMError } from '../lib/server-actions.ts';
@@ -115,9 +116,9 @@ describe('lead enquiry entry without customer selection', () => {
     const data = workspace();
     act(data, 'lead_save', { title: 'Solar project', contact: 'Site contact', phone: '9876543210', expectedKw: '10.5', siteAddress: 'Project site', stateCode: '06' });
     const lead = data.leads[0]; const customer = data.customers[0];
-    act(data, 'quote_save', { leadId: lead.id, title: 'Installation scope', validUntil: '2026-12-27', placeOfSupply: '06', siteAddress: 'Project site', items: [
+    act(data, 'quote_save', { leadId: lead.id, title: 'Installation scope', validUntil: '2026-12-27', placeOfSupply: '06', siteAddress: 'Project site', items: completeQuoteItems([
       { id: 'item', description: 'Installation', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '1000', gstRate: '18' },
-    ] });
+    ]) });
     const quote = data.quotations[0];
     assert.throws(() => act(data, 'quote_issue', { id: quote.id }), /billing address/i);
     act(data, 'customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, address: 'Confirmed billing address', stateCode: '06' });

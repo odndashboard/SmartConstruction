@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const timing = createReadTiming();
   let response: Response;
   try {
-    const data = await getInitialWorkspace({ signal: request.signal, timing });
+    const data = await getInitialWorkspace({ signal: request.signal, timing, jobId: new URL(request.url).searchParams.get('job') });
     response = Response.json({ ...data, operations: data.operations && paymentResponse(request, data.operations) }, { headers: PRIVATE_HEADERS });
   } catch (error) { response = errorResponse(error); }
   response.headers.set('Server-Timing', serverTiming(timing));

@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { applyAction } from '../lib/server-actions.ts';
 import { financialYear, todayIST } from '../lib/finance.ts';
 import type { WorkspaceData } from '../lib/types.ts';
+import { completeQuoteItems } from './fixtures/quotation-items.ts';
 
 /**
  * Execute the actual migration and RPCs against PostgreSQL compiled to WASM.
@@ -114,7 +115,7 @@ async function issuedQuote(leadId: string, title = 'Accepted work scope', validU
   await mutate('company_save', { name: data.company.name, legalName: 'Test contractor', address: 'Actual supplier address', gstin: '06ABCDE1234F1Z5', stateCode: '06', phone: '', email: '', website: '', terms: data.company.terms });
   await mutate('customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, email: customer.email, address: 'Confirmed billing address', stateCode: '06', gstin: customer.gstin });
   const saved = await mutate('quote_save', { leadId, title, validUntil, placeOfSupply: '06', siteAddress: 'Confirmed quote site', terms: 'Accepted terms',
-    items: [{ id: crypto.randomUUID(), description: title, hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }] });
+    items: completeQuoteItems([{ id: crypto.randomUUID(), description: title, hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }]) });
   const quote = saved.data.quotations.find(row => row.title === title)!;
   return (await mutate('quote_issue', { id: quote.id })).data.quotations.find(row => row.id === quote.id)!;
 }
@@ -163,6 +164,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await db.exec(await readFile(new URL('../supabase/migrations/20261127082025_quotation_approval_status.sql', import.meta.url), 'utf8'));
     // Windows checkouts use CRLF: exercise the surgical replacement normalization.
     await db.exec((await readFile(new URL('../supabase/migrations/20261127101206_payments_optional_gst_reopen_work.sql', import.meta.url), 'utf8')).replace(/\r?\n/g, '\r\n'));
+    await db.exec((await readFile(new URL('../supabase/migrations/20261127102202_required_quotation_items.sql', import.meta.url), 'utf8')).replace(/\r?\n/g, '\r\n'));
   });
 
   beforeEach(async () => {
@@ -360,7 +362,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await addMember(ids.manager, 'manager', 'MANAGER');
     for (const actor of [ids.owner, ids.manager]) {
       const lead = (await mutate('lead_save', { title: `Manual Won ${actor}`, expectedKw: '5.5' }, actor)).data.leads.find(row => row.title === `Manual Won ${actor}`)!;
-      const quote = (await mutate('quote_save', { leadId: lead.id, title: 'Unaccepted draft', validUntil: FUTURE_DATE, items: [] }, actor)).data.quotations.find(row => row.leadId === lead.id)!;
+      const quote = (await mutate('quote_save', { leadId: lead.id, title: 'Unaccepted draft', validUntil: FUTURE_DATE, items: completeQuoteItems([]) }, actor)).data.quotations.find(row => row.leadId === lead.id)!;
       const before = await read(actor);
       const statusResult = await mutate('lead_status', { id: lead.id, status: 'WON' }, actor);
       assert.equal(statusResult.data.leads.find(row => row.id === lead.id)?.status, 'WON');
@@ -551,7 +553,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await mutate('customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, email: customer.email, stateCode: customer.stateCode, address: 'Confirmed billing address' });
     const quote = (await mutate('quote_save', {
       leadId: lead.id, title: 'System quotation', validUntil: FUTURE_DATE, placeOfSupply: '06', siteAddress: lead.siteAddress, terms: 'Agreed terms',
-      items: [{ id: 'capacity-item', description: 'Solar installation', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }],
+      items: completeQuoteItems([{ id: 'capacity-item', description: 'Solar installation', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }]),
     })).data.quotations[0];
     const issued = (await mutate('quote_issue', { id: quote.id })).data.quotations[0];
     assert.equal(issued.customer?.id, customer.id);
@@ -666,6 +668,46 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     }
   });
 
+  test('SQL requires each quote category exactly once and rejects incomplete or forged draft rows atomically', async () => {
+    await bootstrap();
+    const lead=(await mutate('lead_save',{title:'Required item validation'})).data.leads[0];
+    const before=await read();
+    const prepared=plan(before,'quote_save',{leadId:lead.id,title:'Complete rows',validUntil:FUTURE_DATE,gstEnabled:false,items:completeQuoteItems([])});
+    const draft=prepared.changes.upserts.quotations[0] as WorkspaceData['quotations'][number];
+    const missingVersion={...draft}; delete missingVersion.itemSchemaVersion;
+    const missingCategory={...draft.items[0]}; delete missingCategory.category;
+    const candidates=[missingVersion,{...draft,itemSchemaVersion:'2'},{...draft,items:draft.items.slice(1)},
+      ...[{category:'Not a category'},{category:draft.items[1].category},{description:' '},{unit:' '},{quantity:'0'},{quantity:'1.0001'},
+        {quantity:1},{unitPrice:'-1'},{unitPrice:'0.001'},{unitPrice:''},{unitPrice:'90000000000.01'},{id:draft.items[1].id}]
+        .map(change=>({...draft,items:[{...draft.items[0],...change},...draft.items.slice(1)]})),
+      {...draft,items:[missingCategory,...draft.items.slice(1)]}];
+    for(const invalid of candidates) {
+      const input=structuredClone(prepared); input.changes.upserts.quotations=[invalid];
+      await rejectsSql(()=>commit(input),'PT400');
+      assert.deepEqual(await read(),before);
+    }
+    const saved=await commit(prepared);
+    assert.equal(saved.data.quotations[0].items.length,9);
+    assert.equal(saved.data.quotations[0].totals.total,0,'Explicit zero prices are valid');
+    assert.equal(saved.data.quotations[0].itemSchemaVersion,2);
+    const changed=emptyChanges(saved.data);
+    changed.upserts.quotations=[{...saved.data.quotations[0],items:draft.items.slice(1)}];
+    await rejectsSql(()=>commit({actor:ids.owner,expectedRevision:saved.data.revision,requestId:crypto.randomUUID(),action:'company_save',payloadHash:hash,changes:changed,message:'Cannot bypass item requirements'}),'PT400');
+  });
+
+  test('current quote revisions preserve required categories and issue cannot bypass them', async () => {
+    await bootstrap();
+    const lead=(await mutate('lead_save',{title:'Revision requirements'})).data.leads[0];
+    const issued=await issuedQuote(lead.id,'Required revision');
+    const revised=(await mutate('quote_revise',{id:issued.id})).data.quotations.find(row=>row.revisionOf===issued.id)!;
+    assert.equal(revised.itemSchemaVersion,2); assert.deepEqual(revised.items.map(row=>row.category),issued.items.map(row=>row.category));
+    const before=await read(); const issuing=plan(before,'quote_issue',{id:revised.id});
+    const changed=issuing.changes.upserts.quotations[0] as WorkspaceData['quotations'][number];
+    issuing.changes.upserts.quotations=[{...changed,items:changed.items.slice(1)}];
+    await rejectsSql(()=>commit(issuing),'PT400'); assert.deepEqual(await read(),before);
+    await mutate('quote_issue',{id:revised.id});
+  });
+
   test('explicit no-GST quotations persist correct decimal totals and issue without GST, HSN or discount input', async () => {
     await bootstrap();
     const created=await mutate('lead_save',{title:'No-GST project',siteAddress:'Actual work site'});
@@ -673,7 +715,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await mutate('company_save',{name:'Contractor',legalName:'Actual contractor',address:'Supplier address',gstin:'',stateCode:'',phone:'',email:'',website:'',terms:''});
     await mutate('customer_save',{id:customer.id,name:customer.name,address:'Billing address'});
     const saved=await mutate('quote_save',{leadId:lead.id,title:'No-GST actual scope',gstEnabled:false,validUntil:FUTURE_DATE,siteAddress:'Actual work site',placeOfSupply:'',
-      items:[{id:'no-gst-item',description:'Installation',quantity:'2.5',unit:'job',unitPrice:'100.01',gstRate:'0'}]});
+      items:completeQuoteItems([{id:'no-gst-item',description:'Installation',quantity:'2.5',unit:'job',unitPrice:'100.01',gstRate:'0'}])});
     const draft=saved.data.quotations[0];
     assert.equal(draft.gstEnabled,false); assert.equal(draft.items[0].hsnSac,''); assert.equal(draft.items[0].discount,'0');
     assert.deepEqual(draft.totals,{subtotal:25003,discount:0,taxable:25003,cgst:0,sgst:0,utgst:0,igst:0,total:25003,mode:'NO_GST',needsConfig:false});
@@ -690,20 +732,20 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await bootstrap();
     const lead=(await mutate('lead_save',{title:'Validated no-GST quote'})).data.leads[0];
     const saved=await mutate('quote_save',{leadId:lead.id,title:'No-GST validation',gstEnabled:false,validUntil:FUTURE_DATE,
-      items:[{id:'checked-item',description:'Real service',quantity:'1',unit:'job',unitPrice:'100',gstRate:'0'}]});
+      items:completeQuoteItems([{id:'checked-item',description:'Real service',quantity:'1',unit:'job',unitPrice:'100',gstRate:'0'}])});
     const draft=saved.data.quotations[0]; const before=await read();
     const candidates: Record<string,unknown>[]=[
       {...draft,gstEnabled:'false'}, {...draft,gstEnabled:null}, {...draft,gstEnabled:true},
-      {...draft,items:[{...draft.items[0],gstRate:'18'}]}, {...draft,items:[{...draft.items[0],quantity:'0'}]},
-      {...draft,items:[{...draft.items[0],unitPrice:'101'}]}, {...draft,items:[{...draft.items[0],gross:'10000'}]},
-      {...draft,items:[{...draft.items[0],cgst:1}]}, {...draft,items:[{...draft.items[0],discount:'1'}]},
+      {...draft,items:[{...draft.items[0],gstRate:'18'},...draft.items.slice(1)]}, {...draft,items:[{...draft.items[0],quantity:'0'},...draft.items.slice(1)]},
+      {...draft,items:[{...draft.items[0],unitPrice:'101'},...draft.items.slice(1)]}, {...draft,items:[{...draft.items[0],gross:'10000'},...draft.items.slice(1)]},
+      {...draft,items:[{...draft.items[0],cgst:1},...draft.items.slice(1)]}, {...draft,items:[{...draft.items[0],discount:'1'},...draft.items.slice(1)]},
       {...draft,totals:{...draft.totals,total:10001}}, {...draft,totals:{...draft.totals,subtotal:'10000'}},
       {...draft,totals:{...draft.totals,mode:'CGST_SGST'}}, {...draft,totals:{...draft.totals,needsConfig:true}},
     ];
     const absent:Record<string,unknown>={...draft}; delete absent.gstEnabled; candidates.push(absent);
     for(const forged of candidates) {
       const changes=emptyChanges(before); changes.upserts.quotations=[forged];
-      await rejectsSql(()=>commit({actor:ids.owner,expectedRevision:before.revision,requestId:crypto.randomUUID(),action:'quote_save',payloadHash:hash,changes,message:'Forged price'}),'23514');
+      await rejectsSql(()=>commit({actor:ids.owner,expectedRevision:before.revision,requestId:crypto.randomUUID(),action:'quote_save',payloadHash:hash,changes,message:'Forged price'}),['23514','PT400']);
       assert.deepEqual(await read(),before);
     }
   });
@@ -713,13 +755,13 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     const lead=(await mutate('lead_save',{title:'Legacy priced project',stateCode:'06'})).data.leads[0];
     await mutate('company_save',{name:'Legacy company',legalName:'Legacy contractor',address:'Supplier address',gstin:'06ABCDE1234F1Z5',stateCode:'06',phone:'',email:'',website:'',terms:''});
     const saved=await mutate('quote_save',{leadId:lead.id,title:'Legacy taxable quote',gstEnabled:true,placeOfSupply:'06',validUntil:FUTURE_DATE,
-      items:[{id:'legacy-item',description:'Service',hsnSac:'9954',quantity:'1',unit:'job',unitPrice:'1000',discount:'100',gstRate:'18'}]});
+      items:completeQuoteItems([{id:'legacy-item',description:'Service',hsnSac:'9954',quantity:'1',unit:'job',unitPrice:'1000',discount:'100',gstRate:'18'}])});
     const original=saved.data.quotations[0];
     const legacy:Record<string,unknown>={...original}; delete legacy.gstEnabled;
     const changes=emptyChanges(saved.data); changes.upserts.quotations=[legacy];
     await commit({actor:ids.owner,expectedRevision:saved.data.revision,requestId:crypto.randomUUID(),action:'quote_save',payloadHash:hash,changes,message:'Historical missing mode fixture'});
     const edited=await mutate('quote_save',{id:original.id,leadId:lead.id,title:'Edited legacy title',placeOfSupply:'06',validUntil:FUTURE_DATE,
-      items:[{id:'legacy-item',description:'Service',quantity:'1',unit:'job',unitPrice:'1000',gstRate:'18'}]});
+      items:completeQuoteItems([{id:'legacy-item',description:'Service',quantity:'1',unit:'job',unitPrice:'1000',gstRate:'18'}])});
     const quote=edited.data.quotations.find(row=>row.id===original.id)!;
     assert.equal(quote.gstEnabled,true); assert.equal(quote.items[0].hsnSac,'9954'); assert.equal(quote.items[0].discount,'100');
     assert.deepEqual(quote.totals,original.totals);
@@ -732,7 +774,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     await mutate('customer_save',{id:customer.id,name:customer.name,address:'Billing address',stateCode:'06'});
     await mutate('company_save',{name:'Registered business',legalName:'Registered contractor',address:'Supplier address',gstin:'06ABCDE1234F1Z5',stateCode:'06',phone:'',email:'',website:'',terms:''});
     const saved=await mutate('quote_save',{leadId:lead.id,title:'Taxable installation',gstEnabled:true,validUntil:FUTURE_DATE,siteAddress:'Actual site',placeOfSupply:'06',
-      items:[{id:'tax-item',description:'Installation',quantity:'1',unit:'job',unitPrice:'100',gstRate:'18'}]});
+      items:completeQuoteItems([{id:'tax-item',description:'Installation',quantity:'1',unit:'job',unitPrice:'100',gstRate:'18'}])});
     const draft=saved.data.quotations[0];
     assert.equal(draft.items[0].hsnSac,''); assert.equal(draft.items[0].discount,'0');
     const issued=(await mutate('quote_issue',{id:draft.id})).data.quotations[0];
@@ -1001,7 +1043,7 @@ describe('Supabase database authorization and atomic writes', { concurrency: fal
     const leadId = leadResult.data.leads[0].id;
     const quoteResult = await mutate('quote_save', {
       leadId, title: 'Synthetic quotation', validUntil: FUTURE_DATE, placeOfSupply: '06', siteAddress: 'Synthetic work site', terms: 'Synthetic agreed terms',
-      items: [{ id: 'synthetic-item', description: 'Synthetic construction service', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }],
+      items: completeQuoteItems([{ id: 'synthetic-item', description: 'Synthetic construction service', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '10000', discount: '0', gstRate: '18' }]),
     });
     const quoteId = quoteResult.data.quotations[0].id;
     const issuedResult = await mutate('quote_issue', { id: quoteId });

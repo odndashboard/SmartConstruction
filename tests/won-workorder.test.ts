@@ -1,3 +1,4 @@
+import { completeQuoteItems } from './fixtures/quotation-items.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyAction, CRMError } from '../lib/server-actions.ts';
@@ -21,9 +22,9 @@ function issue(data: WorkspaceData, leadId: string, title = 'Installation scope'
   const lead = data.leads.find(row => row.id === leadId)!;
   const customer = data.customers.find(row => row.id === lead.customerId)!;
   act(data, 'customer_save', { id: customer.id, name: customer.name, contact: customer.contact, phone: customer.phone, address: 'Confirmed billing address', stateCode: '06' });
-  act(data, 'quote_save', { leadId, title, validUntil: '2026-12-27', placeOfSupply: '06', siteAddress: 'Approved project site', items: [
+  act(data, 'quote_save', { leadId, title, validUntil: '2026-12-27', placeOfSupply: '06', siteAddress: 'Approved project site', items: completeQuoteItems([
     { id: crypto.randomUUID(), description: title, hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '1000', gstRate: '18' },
-  ] });
+  ]) });
   const quote = data.quotations.at(-1)!;
   act(data, 'quote_issue', { id: quote.id });
   return quote;

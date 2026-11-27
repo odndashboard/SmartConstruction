@@ -6,11 +6,12 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import { computeQuote } from '../lib/finance.ts';
+import { REQUIRED_QUOTE_CATEGORIES, MAX_QUOTE_ITEMS } from '../lib/quotation-categories.ts';
 
 // Exercise the real editor and printable quotation, including their handlers.
 const source = readFileSync(new URL('../components/CRMApp.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('CRMApp.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ['QuoteEditor', 'Totals', 'QuoteDocument', 'Field'];
+const names = ['initializeQuoteItems', 'QuoteEditor', 'Totals', 'QuoteDocument', 'Field'];
 const code = names.map(name => {
   const node = ast.statements.find(item => ts.isFunctionDeclaration(item) && item.name?.text === name);
   assert.ok(node, `Missing function ${name}`);
@@ -22,11 +23,11 @@ const wrapper = ({ children }) => React.createElement('span', null, children);
 const helpers = {
   useState(initial) {
     const index = cursor++;
-    if (!(index in state)) state[index] = initial;
+    if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial;
     return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }];
   },
   FormData: class { constructor(form) { this.form = form; } entries() { return this.form.entries; } },
-  computeQuote, formatINR: value => `INR ${(value / 100).toFixed(2)}`, units: ['job'], plusDays: () => '2026-12-27',
+  computeQuote, REQUIRED_QUOTE_CATEGORIES, MAX_QUOTE_ITEMS, formatINR: value => `INR ${(value / 100).toFixed(2)}`, units: ['job'], plusDays: () => '2026-12-27',
   displayDate: value => value, stateLabel: value => value, customerForLead: data => data.customers[0],
   FormFooter: blank, IconButton: wrapper, StateOptions: blank, ShieldCheck: blank, FileText: blank,
   CircleAlert: blank, Plus: blank, Trash2: blank,
@@ -51,13 +52,23 @@ function fields(element) {
 function input(tree, label) { return fields(tree).find(item => item.props.label === label)?.props.children; }
 function button(tree, label) { return fields(tree).find(item => item.type === 'button' && React.Children.toArray(item.props.children).includes(label)); }
 function submit(tree) { tree.props.onSubmit({ preventDefault() {}, currentTarget: { entries: [['validUntil', '2026-12-27'], ['terms', '']] } }); }
+function rows(tree) { return fields(tree).filter(item => item.type === 'section' && item.props.className === 'quote-item-editor'); }
+function completeRows(tree) {
+  for (const [index, row] of rows(tree).entries()) {
+    for (const [label, value] of [['Description *', `Customer-specified scope ${index + 1}`], ['Unit *', 'job'], ['Quantity *', '1'], ['Unit price (₹) *', '0'], ['GST rate (%) *', '18']]) {
+      const control = input(row, label);
+      if (control && !control.props.value) control.props.onChange({ target: { value } });
+    }
+  }
+}
 
 test('new quotation editor defaults to No GST and removes HSN/SAC and Discount inputs', () => {
   reset(); let tree = editor();
   assert.equal(input(tree, 'GST').props.value, 'NONE');
-  button(tree, 'Add item').props.onClick(); tree = editor();
+  assert.equal(rows(tree).length, 9);
   assert.equal(input(tree, 'GST rate (%) *'), undefined);
   assert.doesNotMatch(renderToStaticMarkup(tree), /HSN|SAC|Discount|Total incl\. GST|setup needed/);
+  completeRows(tree);
   input(tree, 'Description *').props.onChange({ target: { value: 'Solar scope' } });
   input(tree, 'Unit price (₹) *').props.onChange({ target: { value: '1000' } });
   const calls = []; tree = editor({ mutate: (...args) => calls.push(args) }); submit(tree);
@@ -77,6 +88,7 @@ test('Apply GST exposes a reviewed rate without restoring removed fields and swi
   assert.ok(input(tree, 'GST rate (%) *').props.required);
   assert.equal(input(tree, 'Discount (₹)'), undefined);
   assert.equal(input(tree, 'HSN / SAC *'), undefined);
+  completeRows(tree);
   const calls = []; tree = editor({ quote: historical, data: configured, mutate: (...args) => calls.push(args) }); submit(tree);
   assert.equal(calls[0][1].items[0].discount, '25');
   assert.equal(calls[0][1].items[0].hsnSac, '9954');
@@ -113,4 +125,86 @@ test('new GST quotations print rates without unused HSN or Discount fields', () 
   assert.doesNotMatch(html, /HSN|SAC|Discount/);
   assert.match(html, /Total incl\. GST/);
   assert.match(html, /INR 1180.00/);
+});
+
+test('nine named rows require deliberate descriptions, quantities, units and prices and cannot be removed', () => {
+  reset(); const tree = editor();
+  const sections = rows(tree);
+  const names = sections.map(row => fields(row).find(item => item.type === 'strong').props.children);
+  assert.deepEqual(names, ['Panels', 'Inverter', 'Structure', 'DC Wire', 'Ac Wire', 'Earthing Wire', 'Earthing ROD', 'Lighting Arrester', 'Filing']);
+  for (const row of sections) {
+    for (const label of ['Description *', 'Unit *', 'Quantity *', 'Unit price (₹) *']) {
+      assert.equal(input(row, label).props.required, true);
+      assert.equal(input(row, label).props.value, '');
+    }
+    assert.equal(input(row, 'Quantity *').props.min, '0.001');
+    assert.equal(input(row, 'Unit price (₹) *').props.min, '0');
+    assert.equal(fields(row).some(item => item.props.label?.startsWith('Remove item')), false);
+  }
+  assert.match(renderToStaticMarkup(tree), /Enter ₹0 when its price is included in a package/);
+});
+
+test('required row IDs stay stable across edits and optional extras remain addable and removable', () => {
+  reset(); let tree = editor();
+  const originalIds = rows(tree).map(row => row.key);
+  completeRows(tree); tree = editor();
+  assert.deepEqual(rows(tree).map(row => row.key), originalIds);
+  button(tree, 'Add extra item').props.onClick(); tree = editor();
+  assert.equal(rows(tree).length, 10);
+  assert.deepEqual(rows(tree).slice(0, 9).map(row => row.key), originalIds);
+  const remove = fields(rows(tree)[9]).find(item => item.props.label === 'Remove item 10');
+  assert.ok(remove); remove.props.onClick(); tree = editor();
+  assert.deepEqual(rows(tree).map(row => row.key), originalIds);
+});
+
+test('legacy initialization preserves original IDs, labels and financial inputs without category guesses', () => {
+  const existing = { ...noGst, status: 'DRAFT', items: [
+    { ...line, id: 'legacy-panels', description: 'Panels', quantity: '12', unit: 'nos', unitPrice: '4000', discount: '10', hsnSac: '8541' },
+    { ...line, id: 'named-inverter', category: 'Inverter', description: 'Genuine existing inverter description', quantity: '1', unit: 'nos', unitPrice: '20000' },
+  ] };
+  const frozen = structuredClone(existing);
+  const initialized = views.initializeQuoteItems(existing, false);
+  assert.equal(initialized.length, 10);
+  for (let index = 0; index < 2; index++) {
+    for (const key of Object.keys(existing.items[index])) assert.deepEqual(initialized[index][key], existing.items[index][key]);
+  }
+  assert.equal(initialized[0].category, undefined, 'the old description must not be interpreted as a category');
+  assert.equal(initialized.filter(item => item.category === 'Inverter').length, 1);
+  assert.equal(initialized.filter(item => item.category === 'Panels').length, 1);
+  for (const row of initialized.slice(2)) assert.equal(row.unitPrice, '');
+  assert.deepEqual(existing, frozen);
+  const completed = { ...noGst, items: REQUIRED_QUOTE_CATEGORIES.map((category, index) => ({ ...line, id: `saved-${index}`, category })) };
+  assert.deepEqual(views.initializeQuoteItems(completed, false).map(row => row.id), completed.items.map(row => row.id));
+});
+
+test('legacy maximum-size drafts retain 100 original rows plus nine required rows without further extras', () => {
+  const quote = { ...noGst, status: 'DRAFT', items: Array.from({ length: 100 }, (_, index) => ({ ...line, id: `legacy-${index}` })) };
+  reset(); const tree = editor({ quote });
+  assert.equal(rows(tree).length, MAX_QUOTE_ITEMS);
+  assert.equal(button(tree, 'Add extra item').props.disabled, true);
+  assert.match(renderToStaticMarkup(tree), /Your existing lines and prices are kept/);
+  assert.deepEqual(views.initializeQuoteItems(quote, false).slice(0, 100).map(row => row.id), quote.items.map(row => row.id));
+});
+
+test('save requires all row inputs and permits explicit zero-priced package inclusions', () => {
+  for (const [label, value] of [['Description *', '  '], ['Unit *', ''], ['Quantity *', '0'], ['Unit price (₹) *', ''], ['Unit price (₹) *', '-1']]) {
+    reset(); const calls = []; let tree = editor(); completeRows(tree);
+    tree = editor(); input(rows(tree)[0], label).props.onChange({ target: { value } });
+    tree = editor({ mutate: (...args) => calls.push(args) }); submit(tree);
+    assert.equal(calls.length, 0, `${label}: ${value}`);
+  }
+  reset(); const calls = []; let tree = editor(); completeRows(tree);
+  tree = editor({ mutate: (...args) => calls.push(args) }); submit(tree);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0][1].items.map(item => item.category), [...REQUIRED_QUOTE_CATEGORIES]);
+  assert.ok(calls[0][1].items.every(item => item.unitPrice === '0' && Number(item.quantity) > 0));
+});
+
+test('printed quotations display every category beside its own entered description', () => {
+  const items = REQUIRED_QUOTE_CATEGORIES.map((category, index) => ({ ...line, id: `categorized-${index}`, category, description: `Customer specification ${index + 1}` }));
+  const quote = { ...noGst, ...computeQuote(items, '', '', false) };
+  const html = renderToStaticMarkup(React.createElement(views.QuoteDocument, { quote, data }));
+  for (const item of items) {
+    assert.ok(html.includes(`<small>${item.category}</small><strong>${item.description}</strong>`));
+  }
 });

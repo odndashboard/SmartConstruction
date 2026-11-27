@@ -5,6 +5,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
+import { REQUIRED_QUOTE_CATEGORIES, getMissingQuoteCategories } from '../lib/quotation-categories.ts';
 
 // Compile the actual status form and views with controlled hook state so tests
 // can exercise select/change/submit handlers without the dashboard network client.
@@ -34,7 +35,7 @@ const helpers = {
   FormFooter: footer, Building2: blank, CalendarDays: blank, RefreshCw: blank, ArrowRight: blank,
   ChevronDown: blank, ArrowUpRight: blank, Printer: blank, Pencil: blank, Check: blank, FileText: blank,
   CheckCircle2: blank, HardHat: blank,
-  QUOTE_LABELS: labels, todayIST: () => '2026-11-27',
+  getMissingQuoteCategories, QUOTE_LABELS: labels, todayIST: () => '2026-11-27',
   effectiveQuoteStatus: quote => quote.status === 'ISSUED' && quote.validUntil < '2026-11-27' ? 'EXPIRED' : quote.status,
   customerForLead: data => data.customers[0], displayDate: value => value, stateLabel: value => value,
   formatINR: value => `INR ${value / 100}`,
@@ -45,7 +46,7 @@ const compiled = ts.transpileModule(`${code}\nexport { ${names.join(',')} };`, {
 const views = {};
 new Function('require', 'exports', ...Object.keys(helpers), compiled)(createRequire(import.meta.url), views, ...Object.values(helpers));
 const quote = { id: 'quote-test', leadId: 'lead-test', number: 'Q/2026/001', title: 'Solar project', revision: 1,
-  status: 'ISSUED', validUntil: '2026-12-20', totals: { total: 10000, mode: 'CGST_SGST', needsConfig: false }, items: [], siteAddress: 'Site', placeOfSupply: '06', terms: '' };
+  status: 'ISSUED', validUntil: '2026-12-20', totals: { total: 10000, mode: 'CGST_SGST', needsConfig: false }, items: REQUIRED_QUOTE_CATEGORIES.map((category, index) => ({ id: `item-${index}`, category, description: `Reviewed ${category} scope`, quantity: '1', unit: 'job', unitPrice: '0', discount: '0', gstRate: '0' })), siteAddress: 'Site', placeOfSupply: '06', terms: '' };
 function workspace(role = 'OWNER') {
   return { user: { role }, customers: [{ id: 'customer-test', name: 'Customer', address: 'Actual test billing address' }],
     leads: [{ id: quote.leadId, customerId: 'customer-test', status: 'WON' }], quotations: [quote],
@@ -118,6 +119,26 @@ test('draft billing shortcut handles blank and missing addresses and preserves r
     assert.deepEqual(views.modalAfterClose(opened[0]), { type: 'quote_status', id: quote.id });
   }
   assert.equal(views.modalAfterClose({ type: 'customer', id: 'customer-test' }), null);
+});
+
+test('legacy draft status identifies missing required categories and opens its own work-item editor', async () => {
+  reset(); const data = workspace(); data.customers[0].address = '';
+  const legacy = { ...quote, status: 'DRAFT', items: [{ id: 'old-item', description: 'Actual package scope', unitPrice: '1000' }, quote.items[0]] };
+  const frozen = structuredClone(legacy);
+  const calls = []; const opened = [];
+  const options = { mutate: async (...args) => { calls.push(args); return data; }, open: target => opened.push(target) };
+  let tree = renderForm(legacy, data, options);
+  const html = renderToStaticMarkup(tree);
+  assert.match(html, /Required work items needed/);
+  for (const category of REQUIRED_QUOTE_CATEGORIES.slice(1)) assert.ok(html.includes(category));
+  assert.ok(button(tree, 'Edit billing details'));
+  button(tree, 'Edit work items').props.onClick();
+  assert.deepEqual(opened, [{ type: 'quote', id: quote.id }]);
+  field(tree, 'status').props.onChange({ target: { value: 'ISSUED' } });
+  data.customers[0].address = 'Genuine billing address';
+  tree = renderForm(legacy, data, options); await submit(tree);
+  assert.equal(calls.length, 0);
+  assert.deepEqual(legacy, frozen);
 });
 
 test('acceptance requires a reference, uses the existing action, then returns to the same quotation', async () => {

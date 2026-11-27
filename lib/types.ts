@@ -1,3 +1,6 @@
+import type { QuoteItemCategory } from './quotation-categories';
+export type { QuoteItemCategory } from './quotation-categories';
+
 export type Role = 'OWNER' | 'MANAGER' | 'SALES' | 'OPERATIONS' | 'ACCOUNTANT' | 'VIEWER';
 export type LeadStatus = 'NEW' | 'CONTACTED' | 'SITE_VISIT' | 'QUOTED' | 'NEGOTIATION' | 'WON' | 'LOST';
 export type QuoteStatus = 'DRAFT' | 'ISSUED' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'SUPERSEDED';
@@ -26,6 +29,7 @@ export interface FollowUp {
   completedAt?: string; isDemo: boolean; createdAt: string; updatedAt: string;
 }
 export interface QuoteItemInput {
+  category?: QuoteItemCategory;
   id: string; description: string; hsnSac: string; quantity: string; unit: string;
   unitPrice: string; discount: string; gstRate: string;
 }
@@ -37,6 +41,8 @@ export interface QuoteTotals {
   utgst: number; igst: number; total: number; mode: TaxMode; needsConfig: boolean;
 }
 export interface Quotation {
+  /** Required-category layout; absent on immutable historical quotations. */
+  itemSchemaVersion?: 2;
   /** Absent on historical quotations, whose original GST treatment is retained. */
   gstEnabled?: boolean;
   id: string; leadId: string; number: string|null; title: string; validUntil: string;

@@ -1,3 +1,4 @@
+import { completeQuoteItems } from './fixtures/quotation-items.ts';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { applyAction, CRMError } from '../lib/server-actions.ts';
@@ -49,7 +50,7 @@ function quoteInput(leadId: string) {
     unit: 'job', unitPrice: '500', discount: '100', gstRate: '18',
   }];
   return { leadId, title: 'Synthetic renovation quotation', validUntil: '2026-12-23',
-    placeOfSupply: '06', siteAddress: 'Synthetic project address', terms: 'Synthetic agreed terms.', items };
+    placeOfSupply: '06', siteAddress: 'Synthetic project address', terms: 'Synthetic agreed terms.', items: completeQuoteItems(items) };
 }
 function addQuote(data: WorkspaceData) {
   const lead = addLead(data);

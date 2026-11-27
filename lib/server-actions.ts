@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { computeQuote, validateRegistration, parseMoney, todayIST, financialYear, STATE_OPTIONS } from './finance.ts';
 import { createDemoData } from './demo.ts';
 import { WORK_LABELS, WORK_TRANSITIONS } from './work-order-status.ts';
+import { REQUIRED_QUOTE_CATEGORIES, MAX_QUOTE_ITEMS, QUOTE_ITEM_SCHEMA_VERSION, validateRequiredQuoteItems } from './quotation-categories.ts';
 import type { WorkspaceData, Role, Lead, LeadStatus, Quotation, WorkOrder, WorkStatus, QuoteItemInput, Company } from './types';
 
 export class CRMError extends Error {
@@ -35,6 +36,7 @@ const workStatus = z.enum(['PLANNED', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELL
 const owner = blank(200);
 const identity = z.object({ id }).strict();
 const item = z.object({
+  category: z.enum(REQUIRED_QUOTE_CATEGORIES).optional(),
   id, description: required(2000), hsnSac: text(8).optional(), quantity: required(30), unit: required(24),
   unitPrice: required(30), discount: text(30).optional(), gstRate: text(30).default(''),
 }).strict();
@@ -51,7 +53,8 @@ const schemas: Record<string, z.ZodType<any>> = {
   followup_complete: z.object({ id, outcome: required(5000) }).strict(),
   followup_cancel: identity,
   quote_save: z.object({ id: id.optional(), leadId: id, title: required(), validUntil: date, placeOfSupply: state, gstEnabled: z.boolean().optional(),
-    siteAddress: blank(2000), terms: blank(12000), items: z.array(item).max(100) }).strict(),
+    itemSchemaVersion: z.literal(QUOTE_ITEM_SCHEMA_VERSION).optional(),
+    siteAddress: blank(2000), terms: blank(12000), items: z.array(item).max(MAX_QUOTE_ITEMS) }).strict(),
   quote_issue: identity,
   quote_accept: z.object({ id, acceptanceNote: required(5000) }).strict(),
   quote_decline: identity,
@@ -116,6 +119,10 @@ function calculate(items: QuoteItemInput[], supplierState: string, placeOfSupply
   try { return computeQuote(items, supplierState, placeOfSupply, gstEnabled); }
   catch (error) { throw new CRMError(error instanceof Error ? error.message : 'Check quotation values.'); }
 }
+function validateQuoteCategories(items: QuoteItemInput[]) {
+  try { validateRequiredQuoteItems(items); }
+  catch (error) { throw new CRMError(error instanceof Error ? error.message : 'Complete the required quotation work items.'); }
+}
 function validateGst(gstin: string, stateCode: string, required = false) {
   try { validateRegistration(gstin, stateCode, required); }
   catch (error) { throw new CRMError(error instanceof Error ? error.message : 'Check registration details.'); }
@@ -125,7 +132,7 @@ function inputMoney(value: string) {
   catch (error) { throw new CRMError(error instanceof Error ? error.message : 'Check amount.'); }
 }
 function quoteInputs(quote: Quotation): QuoteItemInput[] {
-  return quote.items.map(({ id, description, hsnSac, quantity, unit, unitPrice, discount, gstRate }) => ({ id, description, hsnSac, quantity, unit, unitPrice, discount, gstRate }));
+  return quote.items.map(({ id, category, description, hsnSac, quantity, unit, unitPrice, discount, gstRate }) => ({ id, ...(category === undefined ? {} : { category }), description, hsnSac, quantity, unit, unitPrice, discount, gstRate }));
 }
 
 /** A won enquiry can start delivery planning without implying a priced or
@@ -249,6 +256,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       const existing = p.id ? get(data.quotations, p.id, 'Quotation') : undefined;
       if (existing) { assert(existing.status === 'DRAFT', 'Issued quotations are immutable. Create a revision.'); assert(existing.leadId === lead.id, 'A quotation cannot move to another lead.'); }
       assert(new Set(p.items.map((line: QuoteItemInput) => line.id)).size === p.items.length, 'Every work item must have a unique ID.');
+      validateQuoteCategories(p.items);
       // Older open clients submit explicit positive rates without the new flag.
       // Edits always retain the saved treatment unless the user changes it.
       const gstEnabled = p.gstEnabled ?? (existing ? existing.gstEnabled !== false : p.items.some((line: QuoteItemInput) => Number(line.gstRate) > 0));
@@ -257,7 +265,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
         return { ...line, hsnSac: line.hsnSac ?? saved?.hsnSac ?? '', discount: line.discount ?? saved?.discount ?? '0' };
       });
       const calculated = calculate(inputs, data.company.stateCode, p.placeOfSupply, gstEnabled);
-      const record: Quotation = { ...p, ...calculated, gstEnabled, id: existing?.id ?? crypto.randomUUID(), number: null, status: 'DRAFT',
+      const record: Quotation = { ...p, ...calculated, itemSchemaVersion: QUOTE_ITEM_SCHEMA_VERSION, gstEnabled, id: existing?.id ?? crypto.randomUUID(), number: null, status: 'DRAFT',
         revision: existing?.revision ?? 1, ...(existing?.revisionOf ? { revisionOf: existing.revisionOf } : {}),
         acceptanceNote: '', isDemo: lead.isDemo, createdAt: existing?.createdAt ?? stamp, updatedAt: stamp };
       if (existing) Object.assign(existing, record); else data.quotations.push(record);
@@ -267,6 +275,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
     case 'quote_issue': {
       const quote = get(data.quotations, p.id, 'Quotation');
       assert(quote.status === 'DRAFT', 'Only a draft quotation can be issued.');
+      validateQuoteCategories(quote.items);
       const lead = get(data.leads, quote.leadId, 'Lead');
       assert(lead.status !== 'LOST', 'Reopen the lost lead before issuing its quotation.');
       const customer = get(data.customers, lead.customerId, 'Customer');
@@ -280,7 +289,7 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       assert(quote.items.length > 0, 'Add at least one work item.');
       const calculated = calculate(quoteInputs(quote), data.company.stateCode, quote.placeOfSupply, gstEnabled);
       assert(!calculated.totals.needsConfig, 'Configure the supplier and project states before issue.');
-      Object.assign(quote, calculated, { supplier: clone(data.company), customer: clone(customer), number: nextNumber(data, 'Q', now),
+      Object.assign(quote, calculated, { itemSchemaVersion: QUOTE_ITEM_SCHEMA_VERSION, supplier: clone(data.company), customer: clone(customer), number: nextNumber(data, 'Q', now),
         status: 'ISSUED', issuedAt: stamp, updatedAt: stamp });
       if (lead.status !== 'WON') { lead.status = 'QUOTED'; lead.updatedAt = stamp; }
       audit(data, action, 'quotation', quote.id, `Issued quotation ${quote.number}`, stamp);
@@ -330,7 +339,8 @@ export function applyAction(data: WorkspaceData, action: string, rawPayload: unk
       const extended = todayIST(new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000));
       const revised: Quotation = { id: crypto.randomUUID(), leadId: original.leadId, number: null, title: original.title,
         validUntil: original.validUntil > extended ? original.validUntil : extended, placeOfSupply: original.placeOfSupply,
-        siteAddress: original.siteAddress, terms: original.terms, ...calculated, gstEnabled, status: 'DRAFT', revision: original.revision + 1,
+        siteAddress: original.siteAddress, terms: original.terms, ...calculated, gstEnabled,
+        ...(original.itemSchemaVersion ? { itemSchemaVersion: original.itemSchemaVersion } : {}), status: 'DRAFT', revision: original.revision + 1,
         revisionOf: original.id, acceptanceNote: '', isDemo: original.isDemo, createdAt: stamp, updatedAt: stamp };
       original.status = 'SUPERSEDED'; original.updatedAt = stamp; data.quotations.push(revised);
       audit(data, action, 'quotation', revised.id, `Created revision ${revised.revision} of ${original.number}`, stamp);

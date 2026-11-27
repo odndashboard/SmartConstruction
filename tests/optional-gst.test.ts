@@ -1,3 +1,4 @@
+import { completeQuoteItems } from './fixtures/quotation-items.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyAction, CRMError } from '../lib/server-actions.ts';
@@ -20,7 +21,7 @@ function workspace(registered = false): WorkspaceData {
 }
 function input(data: WorkspaceData) {
   return { leadId: data.leads[0].id, title: 'Solar installation', validUntil: '2026-12-27', siteAddress: 'Real site test address',
-    items: [{ id: 'item-1', description: 'Solar installation', quantity: '2', unit: 'job', unitPrice: '500.05' }] };
+    items: completeQuoteItems([{ id: 'item-1', description: 'Solar installation', quantity: '2', unit: 'job', unitPrice: '500.05' }]) };
 }
 function companyInput(company: Company) {
   const { name, legalName, address, gstin, stateCode, phone, email, website, terms } = company;
@@ -111,7 +112,7 @@ test('No GST still validates company, customer billing, site, validity and item 
 
 test('hidden historical HSN and discount survive draft edits by item ID and omitted GST mode', () => {
   const data = workspace(true); const payload = input(data);
-  act(data, 'quote_save', { ...payload, placeOfSupply: '06', items: payload.items.map(item => ({ ...item, hsnSac: '9954', discount: '12.34', gstRate: '18' })) });
+  act(data, 'quote_save', { ...payload, placeOfSupply: '06', items: payload.items.map(item => ({ ...item, hsnSac: '9954', discount: item.id === 'item-1' ? '12.34' : '0', gstRate: '18' })) });
   const quote = data.quotations[0];
   delete quote.gstEnabled; // Represents a draft saved before the optional-GST release.
   const before = structuredClone(quote.totals);
@@ -121,7 +122,7 @@ test('hidden historical HSN and discount survive draft edits by item ID and omit
   assert.equal(quote.items[0].discount, '12.34');
   assert.deepEqual(quote.totals, before);
   act(data, 'quote_save', { ...payload, id: quote.id, placeOfSupply: '06', items: [
-    { ...payload.items[0], id: 'new-item', gstRate: '18' }, { ...payload.items[0], gstRate: '18' },
+    { ...payload.items[0], category: undefined, id: 'new-item', gstRate: '18' }, { ...payload.items[0], gstRate: '18' }, ...payload.items.slice(1),
   ] });
   assert.equal(quote.items[0].discount, '0');
   assert.equal(quote.items[0].hsnSac, '');
@@ -137,7 +138,7 @@ test('hidden historical HSN and discount survive draft edits by item ID and omit
 
 test('issued historical financial snapshots stay intact after settings changes and revision', () => {
   const data = workspace(true); const payload = input(data);
-  act(data, 'quote_save', { ...payload, placeOfSupply: '06', items: payload.items.map(item => ({ ...item, gstRate: '18', hsnSac: '9954', discount: '12.34' })) });
+  act(data, 'quote_save', { ...payload, placeOfSupply: '06', items: payload.items.map(item => ({ ...item, gstRate: '18', hsnSac: '9954', discount: item.id === 'item-1' ? '12.34' : '0' })) });
   const quote = data.quotations[0]; delete quote.gstEnabled;
   act(data, 'quote_issue', { id: quote.id });
   const frozen = structuredClone(quote);

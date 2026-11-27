@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import { WORK_LABELS, WORK_TRANSITIONS } from '../lib/work-order-status.ts';
 import { canRecordWorkOrderPayment } from '../lib/work-order-payments.ts';
+import { REQUIRED_QUOTE_CATEGORIES } from '../lib/quotation-categories.ts';
 
 // Exercise the real work-order views without starting the dashboard or network clients.
 function loadFunctions(path, names, helpers = {}) {
@@ -31,7 +32,7 @@ const helpers = {
   Plus: blank, MoreHorizontal: blank, CalendarDays: blank, HardHat: () => null, ArrowUpRight: blank,
   Pencil: blank, Check: blank, CircleAlert: blank, FileText: blank, ChevronRight: blank,
   RefreshCw: blank, ArrowRight: blank, Printer: blank, CheckCircle2: blank, ChevronDown: blank,
-  WORK_LABELS, WORK_TRANSITIONS, canRecordWorkOrderPayment, IndianRupee: blank,
+  WORK_LABELS, WORK_TRANSITIONS, canRecordWorkOrderPayment, IndianRupee: blank, Package: blank,
   QUOTE_LABELS: { ACCEPTED: 'Accepted' },
   ownerName: () => 'Project owner', displayDate: value => value || 'Not scheduled',
   formatINR: value => `₹${(value / 100).toFixed(2)}`, leadLabel: value => value, stateLabel: value => value,
@@ -105,6 +106,19 @@ test('No GST work orders label the agreed total without claiming included tax', 
   assert.doesNotMatch(html, /incl\. GST/);
 });
 
+test('quotation details and accepted work-order scope retain category and actual description for all required items', () => {
+  const snapshot = { ...quote, items: REQUIRED_QUOTE_CATEGORIES.map((category, index) => ({ ...quote.items[0], id: `item-${index}`, category, description: `Actual specification ${index + 1}` })) };
+  const item = { ...quoted, snapshot };
+  const data = { ...workspace([item]), quotations: [snapshot] };
+  const detail = render('QuoteDetail', { quote: snapshot, data, permissions: { approve: true }, busy: false, open() {}, mutate() {}, print() {} });
+  const scope = render('WorkDetail', { item, data, delivery: false, busy: false, open() {}, mutate() {} });
+  for (const row of snapshot.items) {
+    const label = `<small>${row.category}</small><strong>${row.description}</strong>`;
+    assert.ok(detail.includes(label), row.category);
+    assert.ok(scope.includes(label), row.category);
+  }
+});
+
 test('lead details open each associated work order', () => {
   const extra = { ...quoted, id: 'work-extra', number: 'WO/2026/002' };
   const data = workspace([unquoted, extra]);
@@ -131,13 +145,25 @@ test('completed orders show payment and status actions on the card and details, 
     const opened = [];
     const picker = views.WorkActions({ item: order, data: { ...data, user: { role } }, open: target => opened.push(target) });
     for (const button of children(picker).filter(element => element.type === 'button')) button.props.onClick();
-    const expected = [];
+    const expected = [{ type: 'work_job', id: order.id }];
     if (role === 'OWNER') expected.push({ type: 'work_payment', id: order.id });
     if (['OWNER', 'MANAGER', 'OPERATIONS'].includes(role)) expected.push({ type: 'work_status', id: order.id });
     assert.deepEqual(opened, expected);
   }
   const cancelled = { ...order, status: 'CANCELLED' };
-  assert.equal(views.WorkActions({ item: cancelled, data: workspace([cancelled]), open() {} }), null);
+  const history = render('WorkActions', { item: cancelled, data: workspace([cancelled]), open() {} });
+  assert.match(history, /Job history/);
+  assert.doesNotMatch(history, /Record payment|Change status/);
+});
+
+test('the job opens from active site work, and planned jobs do not issue stock', () => {
+  for (const status of ['ACTIVE', 'ON_HOLD', 'COMPLETED']) {
+    const order = { ...unquoted, status };
+    const html = render('WorkCard', { item: order, data: workspace([order]), open() {} });
+    assert.match(html, /Job items/);
+  }
+  assert.doesNotMatch(render('WorkCard', { item: unquoted, data: workspace(), open() {} }), /Job items|Job history/);
+  assert.doesNotMatch(render('WorkCard', { item: { ...unquoted, status: 'ACTIVE', isDemo: true }, data: workspace(), open() {} }), /Job items/);
 });
 
 test('changing the completed order in the status form saves only its ID and new status', async () => {

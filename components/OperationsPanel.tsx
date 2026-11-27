@@ -7,11 +7,12 @@ import {
   CircleAlert, Clock3, Download, IndianRupee, LoaderCircle, LogIn, LogOut, MapPin,
   Package, Pencil, Plus, ReceiptText, RefreshCw, RotateCcw, ShieldCheck, UsersRound, X,
 } from 'lucide-react';
-import type { Member, WorkspaceData } from '@/lib/types';
+import type { Member, WorkOrder, WorkspaceData } from '@/lib/types';
 import { todayIST } from '@/lib/finance';
 import { saveTextFile } from '@/lib/native-platform';
 import { readJson } from '@/lib/client-read';
 import { PAYMENT_ACCOUNT_HEADERS } from '@/lib/payment-response';
+import { DashboardRefreshError, readDashboardSnapshot } from '@/lib/dashboard-refresh';
 import type { ExpenseReceipt } from '@/lib/operations-extensions';
 import {
   EXPENSE_CATEGORIES, type AttendanceRecord, type AttendanceStatus, type Expense,
@@ -25,10 +26,13 @@ function SectionLoading() {
 }
 const AttendanceAdvanced = dynamic(() => import('./AttendanceAdvanced'), { loading: SectionLoading });
 const StockAdvanced = dynamic(() => import('./StockAdvanced'), { loading: SectionLoading });
+const JobMaterials = dynamic(() => import('./JobMaterials'), { loading: SectionLoading });
 const PaymentsPanel = dynamic(() => import('./PaymentsPanel'), { loading: SectionLoading });
 const ExpenseReceipts = dynamic(() => import('./ExpenseReceipts'), { loading: () => <p className="muted" role="status">Loading receipt controls…</p> });
 
-type Props = { section: OperationsSection; workspace: WorkspaceData; search: string; initialWorkOrderId?: string };
+type Props = {
+  workspace: WorkspaceData; search: string; initialWorkOrderId?: string; onJobBusyChange?: (busy: boolean) => void; onAccessError?: (message: string, status?: number) => void;
+} & ({ section: OperationsSection; order?: never; onWorkspaceUpdate?: never } | { section: 'job'; order: WorkOrder; onWorkspaceUpdate: (data: WorkspaceData) => void });
 type Editor =
   | { kind: 'item'; item?: StockItem }
   | { kind: 'movement'; item?: StockItem }
@@ -46,7 +50,7 @@ type ExportCsv = (label: string, headers: string[], rows: CsvValue[][]) => void;
 const ATTENDANCE_LABELS: Record<AttendanceStatus, string> = { PRESENT: 'Present', HALF_DAY: 'Half day', ABSENT: 'Absent', LEAVE: 'On leave' };
 const EXPENSE_LABELS: Record<ExpenseStatus, string> = { SUBMITTED: 'Awaiting review', APPROVED: 'Approved', REJECTED: 'Rejected', PAID: 'Paid', WITHDRAWN: 'Withdrawn' };
 const MOVEMENT_LABELS: Record<StockMovementType, string> = { IN: 'Stock in', OUT: 'Stock out', ADJUST: 'Adjustment' };
-const SECTION_LABELS: Record<OperationsSection, string> = { stock: 'stock', attendance: 'attendance', expenses: 'expenses', payments: 'payments' };
+const SECTION_LABELS: Record<OperationsSection | 'job', string> = { job: 'job items', stock: 'stock', attendance: 'attendance', expenses: 'expenses', payments: 'payments' };
 
 function quantity(value: number): string {
   return (value / 1000).toLocaleString('en-IN', { maximumFractionDigits: 3 });
@@ -113,7 +117,7 @@ export default function OperationsPanel(props: Props) {
   return <OperationsWorkspace key={props.section} {...props} />;
 }
 
-function OperationsWorkspace({ section, workspace, search, initialWorkOrderId }: Props) {
+function OperationsWorkspace({ section, workspace, search, initialWorkOrderId, order, onJobBusyChange, onWorkspaceUpdate, onAccessError }: Props) {
   const [month, setMonth] = useState(() => todayIST().slice(0, 7));
   const [data, setData] = useState<OperationsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -137,31 +141,46 @@ function OperationsWorkspace({ section, workspace, search, initialWorkOrderId }:
     return () => { mounted.current = false; readController.current?.abort(); };
   }, []);
 
+  const { userId, role, active } = workspace.user;
+  const jobId = order?.id;
   const refresh = useCallback(() => {
     readController.current?.abort();
     const controller = new AbortController();
     readController.current = controller;
     const sequence = ++readSequence.current;
-    return readJson<OperationsData & { error?: string }>(`/api/operations?month=${encodeURIComponent(month)}`, { signal: controller.signal }).then(({ response, body: result }) => {
+    const read = async () => {
+      if (onWorkspaceUpdate) {
+        const snapshot = await readDashboardSnapshot({ userId, role, active }, { signal: controller.signal, jobId });
+        if (!mounted.current || sequence !== readSequence.current) return;
+        onWorkspaceUpdate(snapshot.workspace);
+        if (!snapshot.operations) throw new Error(snapshot.operationsError || 'Refresh the job to load stock.');
+        setData(snapshot.operations);
+        return;
+      }
+      const { response, body: result } = await readJson<OperationsData & { error?: string }>(`/api/operations?month=${encodeURIComponent(month)}`, { signal: controller.signal });
       if (!mounted.current || sequence !== readSequence.current) return;
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) { setData(null); setEditor(null); }
         throw new Error(response.status === 401 ? 'Your session has ended. Sign in again to view your records.' : response.status === 403 ? 'Your account no longer has access to these records.' : result.error || 'This workspace could not be loaded. Please try again.');
       }
       setData(result);
-    }).catch((cause: unknown) => {
+    };
+    return read().catch((cause: unknown) => {
       if (!controller.signal.aborted && mounted.current && sequence === readSequence.current) {
+        if (cause instanceof DashboardRefreshError && (cause.status === 401 || cause.status === 403)) {
+          setData(null); setEditor(null); onAccessError?.(cause.message, cause.status);
+        }
         setError(cause instanceof Error ? cause.message : 'Check your connection and try again.');
       }
     }).finally(() => {
       if (mounted.current && sequence === readSequence.current) setLoading(false);
     });
-  }, [month]);
+  }, [month, onWorkspaceUpdate, onAccessError, userId, role, active, jobId]);
 
   useEffect(() => {
     // Load only this section's code while its authenticated data request runs.
     // This imports static UI code; it does not cache or prefetch private records.
-    const code = section === 'stock' ? import('./StockAdvanced')
+    const code = section === 'job' ? import('./JobMaterials') : section === 'stock' ? import('./StockAdvanced')
       : section === 'attendance' ? import('./AttendanceAdvanced')
         : section === 'payments' ? import('./PaymentsPanel') : import('./ExpenseReceipts');
     void code.catch(() => undefined);
@@ -169,6 +188,11 @@ function OperationsWorkspace({ section, workspace, search, initialWorkOrderId }:
   useEffect(() => { void refresh(); }, [refresh]);
 
   function reload() { setLoading(true); setError(''); void refresh(); }
+
+  useEffect(() => {
+    onJobBusyChange?.(busy || uncertain);
+    return () => onJobBusyChange?.(false);
+  }, [busy, uncertain, onJobBusyChange]);
 
   const closeEditor = useCallback(() => {
     if (busy || uncertain) return;
@@ -218,7 +242,7 @@ function OperationsWorkspace({ section, workspace, search, initialWorkOrderId }:
         if (response.status === 401 || response.status === 403) { setData(null); setEditor(null); }
         if (response.status === 409) {
           await refresh();
-          setError('The records changed while you were working. Review the latest values, then save again.');
+          setError(request.action.startsWith('job_') && result.error ? result.error : 'The records changed while you were working. Review the latest values, then save again.');
         } else setError(result.error || 'This change could not be saved. Check the details and try again.');
         return false;
       }
@@ -238,7 +262,7 @@ function OperationsWorkspace({ section, workspace, search, initialWorkOrderId }:
 
   const save: Save = async (action, payload) => {
     if (!data || busy || receiptBusy || uncertain || !data.permissions.canWrite) return false;
-    return send({ action, payload, expectedRevision: data.revision, requestId: crypto.randomUUID(), month });
+    return send({ action, payload, expectedRevision: data.revision, requestId: crypto.randomUUID(), month: section === 'job' ? data.month : month });
   };
   const exportCsv: ExportCsv = (label, headers, rows) => {
     try {
@@ -246,19 +270,20 @@ function OperationsWorkspace({ section, workspace, search, initialWorkOrderId }:
       saveTextFile(`smart-construction-${label}-${month}.csv`, `\uFEFF${csv}\r\n`, 'text/csv;charset=utf-8');
     } catch { setError('The file could not be prepared. Please try again.'); }
   };
-  const current = data?.month === month ? data : null;
+  const current = section === 'job' || data?.month === month ? data : null;
   const blocked = busy || receiptBusy || uncertain || loading;
 
   return <div className={styles.workspace} aria-busy={loading || busy}>
-    <div className={styles.toolbar}>
+    {section === 'job' ? <div className={styles.toolbar}><div className={styles.scope}><div><strong>{order.title}</strong><small>{order.number}</small></div></div><button type="button" className={styles.iconButton} aria-label="Refresh job items and stock" disabled={blocked} onClick={reload}><RefreshCw size={17} /></button></div> : <div className={styles.toolbar}>
       <div className={styles.scope}><span className={styles.scopeIcon}>{section === 'stock' ? <Package size={18} /> : section === 'attendance' ? <CalendarDays size={18} /> : <ReceiptText size={18} />}</span><div><strong>{section === 'stock' ? 'Shared inventory' : section === 'attendance' ? current?.permissions.admin ? 'Your team, accounted for' : 'Your working day' : section === 'payments' ? 'Customer payment register' : current?.permissions.admin ? 'Company expense control' : 'Your expense requests'}</strong><small>{section === 'stock' ? 'Current balances · monthly movement history' : section === 'attendance' ? 'All attendance times use India Standard Time' : section === 'payments' ? 'Agreed amounts, receipts and outstanding balances · INR' : 'Amounts in INR · keep each request traceable'}</small></div></div>
       <div className={styles.toolbarActions}>{section !== 'payments' && <label className={styles.monthField}><CalendarDays size={15} /><span className={styles.srOnly}>History month</span><input type="month" value={month} min="2000-01" max={todayIST().slice(0, 7)} disabled={blocked} onChange={event => { if (event.target.value) { setEditor(null); setNotice(''); setError(''); setLoading(true); setMonth(event.target.value); } }} /></label>}<button className={styles.iconButton} type="button" aria-label={`Refresh ${SECTION_LABELS[section]}`} title="Refresh" disabled={blocked} onClick={reload}><RefreshCw size={17} className={loading ? 'spin' : undefined} /></button></div>
-    </div>
+    </div>}
     {error && <div className={`${styles.alert} ${styles.error}`} role="alert"><CircleAlert size={18} /><div><strong>{uncertain ? 'Confirm your last change' : 'Something needs your attention'}</strong><p>{error}</p>{uncertain && <button className="button button-secondary button-small" disabled={busy} onClick={() => { if (attempt.current && !busy) void send(attempt.current); }}>{busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}Retry the same change</button>}{!uncertain && !current && <button className="button button-secondary button-small" disabled={loading} onClick={reload}>Try again</button>}</div>{!uncertain && current && <button className={styles.iconButton} aria-label="Dismiss message" onClick={() => setError('')}><X size={16} /></button>}</div>}
     {notice && <div className={`${styles.alert} ${styles.success}`} role="status"><CheckCircle2 size={18} /><p>{notice}</p><button className={styles.iconButton} aria-label="Dismiss confirmation" onClick={() => setNotice('')}><X size={16} /></button></div>}
     {!current ? <div className={styles.loading}>{loading ? <><LoaderCircle size={23} className="spin" /><h3>Opening your {SECTION_LABELS[section]}</h3><p>Bringing the latest records into view.</p></> : <><CircleAlert size={24} /><h3>Records are unavailable</h3><p>Refresh this page to reconnect to your workspace.</p></>}</div> : <>
       {!current.permissions.canWrite && <div className={styles.readOnly}><ShieldCheck size={15} />Your account has view-only access. An administrator can update your permissions.</div>}
       {editor && <section className={styles.editor} aria-label="Edit record"><div className={styles.editorTop}><div><span className={styles.eyebrow}>KEEP THE DETAILS CLEAR</span><h2 tabIndex={-1} ref={editorHeading}>{editorTitle(editor)}</h2></div><button className={styles.iconButton} aria-label="Close form" disabled={busy || uncertain} onClick={closeEditor}><X size={19} /></button></div><RecordEditor key={editorKey(editor)} editor={editor} data={current} members={workspace.members} disabled={blocked} save={save} close={closeEditor} reportError={setError} /></section>}
+      {section === 'job' && <JobMaterials key={`${order.id}:${retrySuccess}`} workspace={workspace} order={order} data={current} blocked={blocked} save={save} />}
       {section === 'stock' && <><StockSection data={current} search={search} blocked={blocked} open={open} exportCsv={exportCsv} /><StockAdvanced key={retrySuccess} workspace={workspace} data={current} blocked={blocked || !!editor} save={save} /></>}
       {section === 'attendance' && <AttendanceSection data={current} workspace={workspace} members={workspace.members} search={search} blocked={blocked} open={open} save={save} exportCsv={exportCsv} editorOpen={!!editor} retrySuccess={retrySuccess} />}
       {section === 'expenses' && <ExpensesSection data={current} search={search} blocked={blocked} open={open} exportCsv={exportCsv} onReceiptBusy={setReceiptBusy} onReceiptsChanged={refresh} />}

@@ -1,3 +1,4 @@
+import { completeQuoteItems } from './fixtures/quotation-items.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyAction, CRMError } from '../lib/server-actions.ts';
@@ -18,9 +19,9 @@ function act(data: WorkspaceData, action: string, payload: unknown, instant = no
 function issued(data: WorkspaceData, validUntil = '2026-12-27') {
   act(data, 'customer_save', { name: 'Actual customer', address: 'Confirmed billing address', stateCode: '06' });
   act(data, 'lead_save', { title: 'Solar project', customerId: data.customers.at(-1)!.id, expectedKw: '10.5', siteAddress: 'Project site', stateCode: '06' });
-  act(data, 'quote_save', { leadId: data.leads.at(-1)!.id, title: 'Installation scope', validUntil, placeOfSupply: '06', siteAddress: 'Approved project site', terms: 'Written scope', items: [
+  act(data, 'quote_save', { leadId: data.leads.at(-1)!.id, title: 'Installation scope', validUntil, placeOfSupply: '06', siteAddress: 'Approved project site', terms: 'Written scope', items: completeQuoteItems([
     { id: crypto.randomUUID(), description: 'Installation', hsnSac: '9954', quantity: '1', unit: 'job', unitPrice: '1000', gstRate: '18' },
-  ] });
+  ]) });
   const quote = data.quotations.at(-1)!; act(data, 'quote_issue', { id: quote.id }); return quote;
 }
 function frozenCommercial(quote: Quotation) {

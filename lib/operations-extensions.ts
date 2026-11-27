@@ -1,5 +1,5 @@
 import type { AttendanceRecord } from './operations-types';
-import type { WorkspaceData } from './types';
+import type { QuoteItemCategory, WorkspaceData } from './types';
 
 export interface ConstructionSite {
   id: string; name: string; address: string; workOrderId: string | null;
@@ -34,6 +34,14 @@ export interface StockTransfer {
 export interface StockReturn {
   id: string; movementId: string; itemId: string; siteId: string; quantityMilli: number;
   reason: string; actorId: string; actorName: string; createdAt: string;
+}
+/** Material consumption is tied to its actual stock movement. Filing is the
+ * only completion entry that has no stock item, site or quantity. */
+export interface JobMaterialEntry {
+  id: string; workOrderId: string; category: QuoteItemCategory;
+  movementId: string | null; itemId: string | null; siteId: string | null;
+  quantityMilli: number | null; returnedMilli: string;
+  actorId: string; actorName: string; createdAt: string;
 }
 export type MaterialRequestStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'FULFILLED' | 'CANCELLED';
 export interface MaterialRequest {
@@ -74,12 +82,15 @@ export interface OperationsExtension {
   sites: ConstructionSite[]; assignments: SiteAssignment[]; shiftRule: ShiftRule;
   attendanceCalendar: ExtendedAttendanceRecord[]; attendanceSummary: AttendanceSummary[];
   siteBalances: SiteStockBalance[]; transfers: StockTransfer[]; returns: StockReturn[];
+  /** All-time job linkage, including returns outside the displayed month. */
+  jobMaterialEntries?: JobMaterialEntry[];
   materialRequests: MaterialRequest[]; purchaseOrders: PurchaseOrder[] | null;
   paymentAccounts: PaymentAccount[] | null; paymentInstallments: PaymentInstallment[] | null;
   customerPayments: CustomerPayment[] | null; expenseReceipts: ExpenseReceipt[];
 }
 export type ExtensionAction = 'site_save' | 'site_active' | 'site_assign' | 'shift_rule_save'
   | 'attendance_overtime_approve' | 'stock_location_move' | 'stock_transfer' | 'stock_return'
+  | 'job_material_issue' | 'job_filing_complete'
   | 'material_request_create' | 'material_request_cancel' | 'material_request_review' | 'material_request_fulfill'
   | 'purchase_order_create' | 'purchase_order_receive' | 'purchase_order_cancel'
   | 'payment_installment_add' | 'payment_installment_cancel' | 'payment_record' | 'payment_void';

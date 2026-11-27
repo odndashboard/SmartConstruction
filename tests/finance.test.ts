@@ -120,7 +120,7 @@ describe('configuration and financial input boundaries', () => {
     assert.equal(items.length, 0);
     assert.equal(totals.total, 0);
     assert.equal(totals.needsConfig, true);
-    assert.throws(() => computeQuote(Array.from({ length: 101 }, (_, i) => item({ id: String(i) })), '06', '06'));
+    assert.throws(() => computeQuote(Array.from({ length: 110 }, (_, i) => item({ id: String(i) })), '06', '06'));
   });
 
   test('negative, zero-quantity, excessive-rate and over-discounted lines are rejected', () => {

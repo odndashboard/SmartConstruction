@@ -65,11 +65,12 @@ There is no public self-registration screen and no first-visitor-is-owner rule. 
 
 - Company currency is INR and business dates use `Asia/Kolkata`.
 - Money is calculated using integer paise and exact intermediate arithmetic.
-- New quotations default to **No GST**. Choose **Apply GST** to use the company's registration, place of supply and reviewed line-item rates. New work items take a description, unit, quantity and price.
+- New quotations default to **No GST**. Choose **Apply GST** to use the company's registration, place of supply and reviewed line-item rates. Enter a description, unit, quantity and price for Panels, Inverter, Structure, DC Wire, Ac Wire, Earthing Wire, Earthing ROD, Lighting Arrester and Filing. Use ₹0 for an item included in a package price. Extra work items are optional.
 - Issuing freezes supplier/customer details and quote amounts. Editing issued commercial terms requires a new revision.
 - Owners and Managers can use **Quotations → Change status** to issue a draft as **Awaiting approval**, record customer acceptance, or mark an issued quotation **Expired**. A quotation expired early can return to **Awaiting approval** through its original valid-until date. After that date, use **Create revision** to set a new validity period.
 - Marking a lead Won automatically creates its Planned work order, including when the lead has no quotation. The work order shows project details and expected kW; approved totals remain blank until a quotation is accepted.
 - Customer acceptance records an acceptance note, marks the lead Won and automatically creates or links that quotation's work order with its approved snapshot.
+- In **Work orders → Job items**, the Owner, Manager or Operations team can record material usage while the order is **In progress**. Each confirmed issue deducts the entered quantity from the selected stock item and location. Filing can be completed separately.
 - Repeating the Won update or quotation conversion reuses the existing applicable order. An accepted quotation can produce only one work order; its approved commercial snapshot is retained. Every additional accepted quotation automatically receives a separate work order for its own scope without overwriting an earlier order.
 - Mutations use a workspace revision and request ID to reject stale edits and safely acknowledge retries.
 - Example data is optional, visibly labelled, and loaded only by an Owner's explicit action.

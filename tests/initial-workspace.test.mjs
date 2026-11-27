@@ -123,6 +123,23 @@ test('bootstrap verifies Auth once and begins both scoped reads before either fi
   assert.equal(result.operationsError, '');
 });
 
+test('opening job materials reads only that job history using the verified dashboard identity', async () => {
+  const state = reset();
+  state.rpc = (name, args) => {
+    const result = resultFor(name, args);
+    if (name === 'crm_job_materials_read') result.data.extension.jobMaterialEntries = [];
+    return result;
+  };
+  const response = await dashboardGET(new Request('https://crm.example.test/api/dashboard?job=work-123'));
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).operations.extension.jobMaterialEntries, []);
+  assert.equal(state.authCalls, 1);
+  assert.deepEqual(state.rpcCalls.map(call => call.name).sort(), ['crm_job_materials_read', 'crm_workspace_read']);
+  const requested = state.rpcCalls.find(call => call.name === 'crm_job_materials_read');
+  assert.equal(requested.args.p_actor_id, OWNER);
+  assert.equal(requested.args.p_work_order_id, 'work-123');
+});
+
 test('each bootstrap gets a fresh identity without leaking the preceding request data', async () => {
   const state = reset();
   state.authUsers = [authUser(OWNER), authUser(EMPLOYEE)];

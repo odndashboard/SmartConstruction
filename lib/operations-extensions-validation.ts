@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { REQUIRED_QUOTE_CATEGORIES } from './quotation-categories.ts';
 
 const text = (max: number) => z.string().trim().max(max);
 const required = (max: number) => text(max).min(1, 'This field is required.');
@@ -44,6 +45,7 @@ const orderLines = z.array(z.object({ itemId: uuid, quantity: decimal(3) }).stri
   .refine(rows => unique(rows, 'itemId'), 'Use one line for each stock item.');
 const receiveLines = z.array(z.object({ lineId: uuid, quantity: decimal(3) }).strict()).min(1).max(25)
   .refine(rows => unique(rows, 'lineId'), 'Each order line can appear only once.');
+const jobMaterialCategory = z.enum(REQUIRED_QUOTE_CATEGORIES);
 
 export const extensionMutationOptions = [
   z.object({ ...common, action: z.literal('site_save'), payload: z.object({ id: uuid.optional(), name: required(200), address: optional(1000), workOrderId: identifier.nullable().default(null) }).strict() }).strict(),
@@ -57,6 +59,8 @@ export const extensionMutationOptions = [
   }) }).strict(),
   z.object({ ...common, action: z.literal('stock_transfer'), payload: z.object({ itemId: uuid, fromSiteId: uuid, toSiteId: uuid, quantity: decimal(3), note: optional(2000), reference: optional(200) }).strict().refine(value => value.fromSiteId !== value.toSiteId, 'Choose different source and destination sites.') }).strict(),
   z.object({ ...common, action: z.literal('stock_return'), payload: z.object({ movementId: uuid, quantity: decimal(3), siteId: uuid.optional(), reason }).strict() }).strict(),
+  z.object({ ...common, action: z.literal('job_material_issue'), payload: z.object({ workOrderId: identifier, category: jobMaterialCategory, itemId: uuid, siteId: uuid, quantity: decimal(3) }).strict() }).strict(),
+  z.object({ ...common, action: z.literal('job_filing_complete'), payload: z.object({ workOrderId: identifier }).strict() }).strict(),
   z.object({ ...common, action: z.literal('material_request_create'), payload: z.object({ siteId: uuid, itemId: uuid, quantity: decimal(3), neededOn: date.nullable().default(null), note: optional(2000) }).strict() }).strict(),
   z.object({ ...common, action: z.literal('material_request_cancel'), payload: z.object({ id: uuid, reason }).strict() }).strict(),
   z.object({ ...common, action: z.literal('material_request_review'), payload: z.object({ id: uuid, status: z.enum(['APPROVED', 'REJECTED']), note: optional(2000) }).strict().refine(value => value.status !== 'REJECTED' || !!value.note, 'Give a reason for rejecting the request.') }).strict(),

@@ -1,4 +1,5 @@
 import type { QuoteItemInput, QuoteItem, QuoteTotals, TaxMode } from './types';
+import { MAX_QUOTE_ITEMS } from './quotation-categories.ts';
 
 export const STATE_OPTIONS = [
   {value:'01',label:'Jammu and Kashmir'}, {value:'02',label:'Himachal Pradesh'},
@@ -66,7 +67,7 @@ export function getTaxMode(supplierState:string, placeOfSupply:string): TaxMode 
   return UTGST.has(supplierState)?'CGST_UTGST':'CGST_SGST';
 }
 export function computeQuote(inputs: QuoteItemInput[], supplierState: string, placeOfSupply: string, gstEnabled = true): {items:QuoteItem[];totals:QuoteTotals} {
-  if (!Array.isArray(inputs) || inputs.length>100) throw new Error('A quotation supports up to 100 work items.');
+  if (!Array.isArray(inputs) || inputs.length>MAX_QUOTE_ITEMS) throw new Error(`A quotation supports up to ${MAX_QUOTE_ITEMS} work items.`);
   const configuredMode = getTaxMode(supplierState,placeOfSupply);
   const mode: TaxMode = gstEnabled ? configuredMode : 'NO_GST';
   const sums = {subtotal:0n,discount:0n,taxable:0n,cgst:0n,sgst:0n,utgst:0n,igst:0n,total:0n};

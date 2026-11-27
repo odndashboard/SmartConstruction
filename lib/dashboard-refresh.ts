@@ -22,8 +22,9 @@ const ACCESS_CHANGED = 'Your workspace access changed. Refresh or sign in again 
 const INCOMPLETE_RESPONSE = 'The server returned an incomplete overview. Please refresh.';
 
 /** One authenticated response supplies the workspace and its operations summary. */
-export async function readDashboardSnapshot(expected: ExpectedMember, options: { signal?: AbortSignal } = {}): Promise<DashboardSnapshot> {
-  const { response, body } = await readJson<Partial<DashboardSnapshot> & { error?: string }>('/api/dashboard', options);
+export async function readDashboardSnapshot(expected: ExpectedMember, options: { signal?: AbortSignal; jobId?: string } = {}): Promise<DashboardSnapshot> {
+  const url = options.jobId ? `/api/dashboard?job=${encodeURIComponent(options.jobId)}` : '/api/dashboard';
+  const { response, body } = await readJson<Partial<DashboardSnapshot> & { error?: string }>(url, options);
   if (!response.ok) {
     const message = body && typeof body === 'object' && typeof body.error === 'string' ? body.error : '';
     throw new DashboardRefreshError(response.status === 401 ? 'Please sign in again to view your workspace.'
@@ -45,6 +46,7 @@ export async function readDashboardSnapshot(expected: ExpectedMember, options: {
     throw new DashboardRefreshError(ACCESS_CHANGED, 403);
   }
   if (operations && !operations.extension) throw new DashboardRefreshError(INCOMPLETE_RESPONSE, 503);
+  if (options.jobId && operations && !Array.isArray(operations.extension.jobMaterialEntries)) throw new DashboardRefreshError('Refresh the job to load its stock history.', 503);
   return { workspace, operations, operationsError: typeof body.operationsError === 'string' ? body.operationsError
     : operations ? '' : 'Some dashboard summaries could not be loaded. Use Refresh overview to try again.' };
 }

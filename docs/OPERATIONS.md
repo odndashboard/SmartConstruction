@@ -97,6 +97,10 @@ Only the submitting employee can attach or remove evidence while their expense i
 
 The storage bucket is private, with no direct anon/authenticated read or write policies. The server checks current identity, active membership and expense ownership before upload/download/removal; downloads recheck access after storage IO. Files are size-limited, content-signature checked, hashed and served with private no-store headers. Signed public URLs are never returned. Upload reservations bind the request ID to the actor, expense and exact file identity, so retrying an uncertain upload cannot create duplicates or replace a different object. Pending reservations count toward the quota for 20 minutes and never appear as published receipts.
 
+## Stock used on a job
+
+Open **Work orders → Job items** on an In progress order. Choose the job category, stock item, source location and the quantity actually used in the stock item's unit. Each issue appears in the stock movement history and against the work order. To return unused material, use **Stock → Returns** against the original issue. The job history includes returned quantities. Filing has a separate completion action. Placing work on hold or closing the order preserves the history.
+
 ## Customer payments
 
 The **Payments** navigation tab is Owner-only, including API reads, writes, exports and activity history. From a Won work order, choose **Record payment** to enter money received against that order. Receipts before quotation acceptance are advances. Acceptance sets the contract amount and credits the advances, including any excess received.
